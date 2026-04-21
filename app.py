@@ -33,6 +33,7 @@ class GameState(db.Model):
     is_active = db.Column(db.Boolean, default=False)
     last_tick = db.Column(db.DateTime, nullable=True) # Last time resources were given
     production_rate = db.Column(db.Integer, default=50 )
+    producer_limit = db.Column(db.Integer, default=100 )
 
 with app.app_context():
     db.create_all()
@@ -84,29 +85,45 @@ def pulse():
 def hello_world():
     return 'Hello, World! This is running on my Oracle ARM instance.'
 
+
 def addUser(name, apples, juices, monies):
-    new_entry = Users(username = name, apples = apples, juices = juices, monies = monies)
+    # Ensure values are integers to prevent DB errors
+    new_entry = Users(
+        username=name,
+        apples=int(apples or 0),
+        juices=int(juices or 0),
+        monies=int(monies or 0)
+    )
     db.session.add(new_entry)
-    pass
+
 
 def addUsers(noFarmers, noAppleMakers, noProducers, noJuiceMakers, noConsumers):
     try:
-        for i in range(0,int(noFarmers)):
-            addUser("F" + str(i), 0, 0, 0)
-        for i in range(0,int(noAppleMakers)):
-            addUser("A" + str(i), 0, 0, 500)
-        for i in range(0,int(noProducers)):
-            addUser("P" + str(i), 0, 0, 100)
-        for i in range(0,int(noJuiceMakers)):
-            addUser("J" + str(i), 0, 0, 500)
-        for i in range(0,int(noConsumers)):
-            addUser("C" + str(i), 0, 0, 0)
-        db.session.commit()
+        # Convert inputs to integers once at the start
+        f_count = int(noFarmers or 0)
+        a_count = int(noAppleMakers or 0)
+        p_count = int(noProducers or 0)
+        j_count = int(noJuiceMakers or 0)
+        c_count = int(noConsumers or 0)
 
-        return "Success <a href='/admin'>Go back</a>"
-    except ValueError:
-        return "Please enter valid numbers", 400
+        for i in range(f_count):
+            addUser(f"F{i}", 0, 0, 0)
+        for i in range(a_count):
+            addUser(f"A{i}", 0, 0, 500)
+        for i in range(p_count):
+            addUser(f"P{i}", 0, 0, 100)
+        for i in range(j_count):
+            addUser(f"J{i}", 0, 0, 500)
+        for i in range(c_count):
+            addUser(f"C{i}", 0, 0, 0)
 
+        db.session.commit()  # The crucial save
+        print(f"DEBUG: Successfully added {f_count + a_count + p_count + j_count + c_count} users.")
+        return True
+    except Exception as e:
+        db.session.rollback()
+        print(f"DEBUG ERROR: {e}")
+        return False
 
 @app.route('/dashboard')
 def dashboard():
@@ -245,6 +262,8 @@ def input_trade():
             return "One or both users not found.", 404
 
         # --- ROLE-BASED VALIDATION LOGIC ---
+        state = GameState.query.first()
+        current_limit = state.producer_limit if state else 100
         def validate_role(user, delta_apples, delta_juices):
             name = user.username
             is_selling_apple = delta_apples > 0
@@ -264,8 +283,8 @@ def input_trade():
                 # Post-trade check for P-users
                 final_apples = user.apples - delta_apples
                 final_juice = user.juices - delta_juices
-                if (final_apples + final_juice) > 100:
-                    return "Producers cannot hold more than 100 total units."
+                if (final_apples + final_juice) > current_limit:
+                    return f"Producers cannot hold more than {current_limit} total units."
 
             # AppleMaker (A): Trade Apples only
             elif name.startswith('A'):
@@ -369,49 +388,118 @@ def input_trade():
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if request.method == 'POST':
-        # Safely drop and recreate
+        # 1. Wipe everything
         db.drop_all()
         db.create_all()
-        default_state = GameState(is_active=False)
+
+        # 2. Setup Game State with current or default values
+        default_state = GameState(
+            is_active=False,
+            production_rate=50,
+            producer_limit=100
+        )
         db.session.add(default_state)
-        # Repopulate
-        addUsers(request.form.get('n1'), request.form.get('n2'),
-                 request.form.get('n3'), request.form.get('n4'),
-                 request.form.get('n5'))
+
+        # 3. Create Users directly from form data
+        try:
+            counts = {
+                'F': int(request.form.get('n1') or 0),
+                'A': int(request.form.get('n2') or 0),
+                'P': int(request.form.get('n3') or 0),
+                'J': int(request.form.get('n4') or 0),
+                'C': int(request.form.get('n5') or 0)
+            }
+
+            for prefix, count in counts.items():
+                for i in range(count):
+                    name = f"{prefix}{i}"
+                    a, j, m = 0, 0, 0
+                    if prefix == 'A': m = 500
+                    if prefix == 'P': m = 100
+                    if prefix == 'J': m = 500
+                    addUser(name, a, j, m)
+
+            db.session.commit()
+            print("Database reset and users created successfully.")
+            print("F", counts['F'])
+            print("A", counts['A'])
+            print("P", counts['P'])
+            print("J", counts['J'])
+            print("C", counts['C'])
+        except Exception as e:
+            db.session.rollback()
+            print(f"Error during reset: {e}")
+            return f"Database Error: {e}", 500
+
         return redirect('/admin')
 
-    # Get game state from DB instead of a global variable
+    # GET logic
     state = GameState.query.first()
-    is_active = state.is_active if state else False
-    current_rate = state.production_rate if state else 50
+    if not state:
+        state = GameState(is_active=False, production_rate=50, producer_limit=100)
+        db.session.add(state)
+        db.session.commit()
 
-    status_text = "RUNNING" if is_active else "STOPPED"
-    button_text = "Stop Game" if is_active else "Start Game"
+    status_text = "RUNNING" if state.is_active else "STOPPED"
+    status_color = "#00ff88" if state.is_active else "#ff4d4d"
+    button_text = "Stop Game" if state.is_active else "Start Game"
 
-    form_html = f'''
-            <h1>Admin Control Panel</h1>
-
-            <div style="border: 2px solid #ccc; padding: 15px; margin-bottom: 20px; font-family: sans-serif;">
-                <h3>Game Status: <span style="color: {'green' if is_active else 'red'};">{status_text}</span></h3>
-                <form action="/toggle_game" method="POST" style="display:inline;">
-                    <button type="submit">{button_text}</button>
-                </form>
-
-                <hr>
-
-                <form action="/update_config" method="POST">
-                    <label>P-User Production Rate (Apples -> Juice): </label>
-                    <input type="number" name="production_rate" value="{current_rate}">
-                    <button type="submit">Update Rate</button>
-                </form>
-            </div>
-
-            <form method="POST" style="font-family: sans-serif; border: 1px solid #444; padding: 15px;">
-                <h3>Reset & Populate Users</h3>
-                <button type="submit" style="background-color: #ff4444; color: white;">RESET DATABASE</button>
+    admin_html = f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Admin Control Panel</title>
+        <style>
+            body {{ font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; padding: 20px; }}
+            .card {{ background: #1e1e1e; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #333; max-width: 500px; margin: auto; }}
+            h2 {{ margin-top: 0; color: #fff; border-bottom: 1px solid #333; padding-bottom: 10px; }}
+            label {{ display: block; margin: 10px 0 5px; font-size: 0.85rem; color: #bbb; }}
+            input {{ width: 100%; padding: 8px; background: #2d2d2d; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; }}
+            button {{ padding: 10px 15px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; margin-top: 10px; }}
+            .btn-blue {{ background: #007bff; color: white; }}
+            .btn-green {{ background: #28a745; color: white; }}
+            .btn-red {{ background: #dc3545; color: white; width: 100%; padding: 15px; }}
+            .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2>Game Engine</h2>
+            <p>Status: <span style="color: {status_color}">{status_text}</span></p>
+            <form action="/toggle_game" method="POST">
+                <button type="submit" class="btn-blue">{button_text}</button>
             </form>
-        '''
-    return render_template_string(form_html)
+        </div>
+
+        <div class="card">
+            <h2>Economic Parameters</h2>
+            <form action="/update_config" method="POST">
+                <label>Production Rate (Apples → Juice)</label>
+                <input type="number" name="production_rate" value="{state.production_rate}">
+                <label>P-User Inventory Limit</label>
+                <input type="number" name="producer_limit" value="{state.producer_limit}">
+                <button type="submit" class="btn-green">Update Settings</button>
+            </form>
+        </div>
+
+        <div class="card" style="border-color: #dc3545;">
+            <h2 style="color: #dc3545;">Reset World</h2>
+            <form method="POST">
+                <div class="grid">
+                    <div><label>Farmers</label><input type="number" name="n1" value="5"></div>
+                    <div><label>AppleMakers</label><input type="number" name="n2" value="3"></div>
+                    <div><label>Producers</label><input type="number" name="n3" value="2"></div>
+                    <div><label>JuiceMakers</label><input type="number" name="n4" value="3"></div>
+                    <div><label>Consumers</label><input type="number" name="n5" value="10"></div>
+                </div>
+                <button type="submit" class="btn-red" onclick="return confirm('Are you sure')">WIPE & RECREATE USERS</button>
+            </form>
+        </div>
+        <p style="text-align:center"><a href="/dashboard" style="color:#666; text-decoration:none;">Dashboard</a></p>
+    </body>
+    </html>
+    '''
+    return render_template_string(admin_html)
 
 
 @app.route('/toggle_game', methods=['POST'])
@@ -442,9 +530,12 @@ def update_config():
     state = GameState.query.first()
     if state:
         new_rate = request.form.get('production_rate')
+        new_limit = request.form.get('producer_limit')
         if new_rate:
             state.production_rate = int(new_rate)
-            db.session.commit()
+        if new_limit:
+            state.producer_limit = int(new_limit)
+        db.session.commit()
     return redirect('/admin')
 
 # This block only runs if you execute the script directly (python app.py)
