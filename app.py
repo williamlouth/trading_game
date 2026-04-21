@@ -232,6 +232,61 @@ def dashboard():
     '''
     return render_template_string(dashboard_html, apple_trades=apple_trades, juice_trades=juice_trades)
 
+
+@app.route('/users')
+def show_users():
+    all_users = Users.query.all()
+
+    users_html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>User Directory</title>
+        <style>
+            body { font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; padding: 40px; }
+            .container { max-width: 800px; margin: auto; }
+            table { width: 100%; border-collapse: collapse; background: #1e1e1e; border-radius: 8px; overflow: hidden; }
+            th, td { padding: 15px; text-align: left; border-bottom: 1px solid #333; }
+            th { background: #252525; color: #888; text-transform: uppercase; font-size: 0.8rem; }
+            tr:hover { background: #2a2a2a; }
+            .money { color: #00ff88; font-family: monospace; }
+            .apples { color: #ff4d4d; }
+            .juice { color: #ffa500; }
+            .username { font-weight: bold; color: #fff; }
+            h1 { text-align: center; }
+            .back-link { display: block; text-align: center; margin-top: 20px; color: #666; text-decoration: none; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>User Balances</h1>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>🍎 Apples</th>
+                        <th>🧃 Juice</th>
+                        <th>💰 Money</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                    <tr>
+                        <td class="username">{{ user.username }}</td>
+                        <td class="apples">{{ user.apples }}</td>
+                        <td class="juice">{{ user.juices }}</td>
+                        <td class="money">${{ "{:,.2f}".format(user.monies) if user.monies else "0.00" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <a href="/dashboard" class="back-link">← Back to Dashboard</a>
+        </div>
+    </body>
+    </html>
+    '''
+    return render_template_string(users_html, users=all_users)
+
 @app.route('/inputTrade', methods=['GET', 'POST'])
 def input_trade():
     if request.method == 'POST':
