@@ -335,8 +335,8 @@ def input_trade():
             if volume == 0: return "Volume cannot be zero.", 400
 
             # dA/dJ interpretation:
-            # If volume is positive, A is SELLING (giving away goods, receiving money)
-            # If volume is negative, A is BUYING (receiving goods, giving away money)
+            # If volume is positive, A is BUYING
+            # If volume is negative, A is SELLING
             money_total = price * volume
             dA, dJ = (volume, 0) if trade_type == 'apple' else (0, volume)
 
@@ -354,10 +354,10 @@ def input_trade():
         current_limit = state.producer_limit if state else 100
         def validate_role(user, delta_apples, delta_juices):
             name = user.username
-            is_selling_apple = delta_apples > 0
-            is_buying_apple = delta_apples < 0
-            is_selling_juice = delta_juices > 0
-            is_buying_juice = delta_juices < 0
+            is_selling_apple = delta_apples < 0
+            is_buying_apple = delta_apples > 0
+            is_selling_juice = delta_juices < 0
+            is_buying_juice = delta_juices > 0
 
             # Farmer (F): Only sell Apples
             if name.startswith('F'):
@@ -401,9 +401,9 @@ def input_trade():
         # -----------------------------------
 
         # Calculate new balances
-        new_a_apples, new_b_apples = user_a.apples - dA, user_b.apples + dA
-        new_a_juices, new_b_juices = user_a.juices - dJ, user_b.juices + dJ
-        new_a_monies, new_b_monies = user_a.monies + money_total, user_b.monies - money_total
+        new_a_apples, new_b_apples = user_a.apples + dA, user_b.apples - dA
+        new_a_juices, new_b_juices = user_a.juices + dJ, user_b.juices - dJ
+        new_a_monies, new_b_monies = user_a.monies - money_total, user_b.monies + money_total
 
         # Final Balance Check (Safety Net)
         balances = [new_a_apples, new_a_juices, new_a_monies,
