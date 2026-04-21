@@ -74,7 +74,7 @@ def dashboard():
         <meta http-equiv="refresh" content="5">
         <style>
             body { font-family: 'Courier New', Courier, monospace; background: #121212; color: #e0e0e0; }
-            .container { display: flex; gap: 30px; padding: 20px; justify-content: center; }
+            .container { display: flex; gap: 200px; padding: 20px; justify-content: center; }
             .column { flex: 1; max-width: 500px; }
             table { width: 100%; border-collapse: collapse; background: #1e1e1e; table-layout: fixed; }
             th, td { padding: 12px 8px; text-align: right; border-bottom: 1px solid #333; }
@@ -98,7 +98,7 @@ def dashboard():
 
             h1, h2 { text-align: center; color: #ffffff; margin-bottom: 10px; }
             .price-cell { font-weight: bold; font-size: 1.2rem; }
-            .size-cell { font-size: 1.1rem; }
+            .size-cell { font-weight: bold; font-size: 1.2rem; }
         </style>
     </head>
     <body>
@@ -117,7 +117,7 @@ def dashboard():
                     </thead>
                     <tbody>
                         {% for t in apple_trades %}
-                            {% set is_sell = t.apples > 0 %}
+                            {% set is_sell = t.apples < 0 %}
                             {% set price = (t.monies / t.apples) | abs %}
                             <tr class="{{ 'sell' if is_sell else 'buy' }}">
                                 <td class="col-arrow">
@@ -143,7 +143,7 @@ def dashboard():
                     </thead>
                     <tbody>
                         {% for t in juice_trades %}
-                            {% set is_sell = t.juices > 0 %}
+                            {% set is_sell = t.juices < 0 %}
                             {% set price = (t.monies / t.juices) | abs %}
                             <tr class="{{ 'sell' if is_sell else 'buy' }}">
                                 <td class="col-arrow">
