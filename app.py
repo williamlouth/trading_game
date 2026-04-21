@@ -62,72 +62,120 @@ def addUsers(noFarmers, noAppleMakers, noProducers, noJuiceMakers, noConsumers):
 @app.route('/inputTrade', methods=['GET', 'POST'])
 def input_trade():
     if request.method == 'POST':
+        trade_type = request.form.get('trade_type')
         name_a = request.form.get('partyA')
         name_b = request.form.get('partyB')
 
         try:
-            # Net change for Party A
-            # Positive = A gives to B | Negative = A receives from B
-            dA = int(request.form.get('apples') or 0)
-            dJ = int(request.form.get('juices') or 0)
-            dM = int(request.form.get('monies') or 0)
-        except ValueError:
-            return "Invalid numbers. Please enter whole numbers for Integer columns.", 400
+            price = float(request.form.get('price') or 0)
+            volume = float(request.form.get('volume') or 0)
 
-        # Fetch users from the 'users' table
+            # GUARD: Price must be positive, but volume can be +/-
+            if price <= 0:
+                return "Price must be a positive number.", 400
+            if volume == 0:
+                return "Volume cannot be zero.", 400
+
+            # Money moves opposite to the goods
+            # If volume is +, A gives item and receives money
+            # If volume is -, A receives item and gives money
+            money_total = price * volume
+
+            dA, dJ = 0, 0
+            if trade_type == 'apple':
+                dA = volume
+            else:
+                dJ = volume
+
+        except ValueError:
+            return "Invalid numbers entered.", 400
+
         user_a = Users.query.filter_by(username=name_a).first()
         user_b = Users.query.filter_by(username=name_b).first()
 
         if not user_a or not user_b:
             return "One or both users not found.", 404
 
-        # 1. Validation: Check for "Nothing Negative" before modifying
-        if (user_a.apples - dA < 0 or user_a.juices - dJ < 0 or user_a.monies - dM < 0 or
-                user_b.apples + dA < 0 or user_b.juices + dJ < 0 or user_b.monies + dM < 0):
-            return "Trade Rejected: This would result in a negative balance.", 400
+        # Calculate new balances
+        # Subtract dA from user_a (if dA is negative, it adds to user_a)
+        new_a_apples, new_b_apples = user_a.apples - dA, user_b.apples + dA
+        new_a_juices, new_b_juices = user_a.juices - dJ, user_b.juices + dJ
+
+        # Money logic: user_a receives money_total
+        # If money_total is +, user_a balance goes up. If -, it goes down.
+        new_a_monies, new_b_monies = user_a.monies + money_total, user_b.monies - money_total
+
+        # CHECK: Nothing Negative
+        balances = [new_a_apples, new_a_juices, new_a_monies,
+                    new_b_apples, new_b_juices, new_b_monies]
+
+        if any(b < 0 for b in balances):
+            return "Trade Rejected: Insufficient funds or stock for this operation.", 400
 
         try:
-            # 2. Update the User objects (SQLAlchemy tracks these changes)
-            user_a.apples -= dA
-            user_a.juices -= dJ
-            user_a.monies -= dM
+            user_a.apples, user_b.apples = new_a_apples, new_b_apples
+            user_a.juices, user_b.juices = new_a_juices, new_b_juices
+            user_a.monies, user_b.monies = new_a_monies, new_b_monies
 
-            user_b.apples += dA
-            user_b.juices += dJ
-            user_b.monies += dM
-
-            # 3. Create the Trade record
+            # Record trade in DB
             new_trade = Trades(
-                partyA=user_a.id,
-                partyB=user_b.id,
-                apples=dA,
-                juices=dJ,
-                monies=dM
+                partyA=user_a.id, partyB=user_b.id,
+                apples=dA, juices=dJ, monies=-money_total
             )
 
-            # 4. Commit everything to the database
             db.session.add(new_trade)
-            db.session.commit()  # This updates BOTH users and inserts the trade
-
-            return f"Trade successful! {name_a} and {name_b} balances updated. <a href='/inputTrade'>New Trade</a>"
-
+            db.session.commit()
+            return f"Trade successful! Volume: {volume}, Price: {price} <a href='/inputTrade'>Back</a>"
         except Exception as e:
             db.session.rollback()
-            return f"Database error: {str(e)}", 500
+            return f"Error: {str(e)}", 500
 
     return render_template_string('''
-    <h1>Complex Trade Entry</h1>
-    <p>A gives to B (Positive) | A receives from B (Negative)</p>
-    <form method="POST">
-        <p>Party A (Username): <input type="text" name="partyA" required></p>
-        <p>Party B (Username): <input type="text" name="partyB" required></p>
-        <hr>
-        <p>Apples: <input type="number" name="apples" value="0"></p>
-        <p>Juices: <input type="number" name="juices" value="0"></p>
-        <p>Monies: <input type="number" name="monies" value="0"></p>
-        <button type="submit">Execute Trade</button>
-    </form>
-    ''')
+        <style>
+            .container { display: flex; gap: 50px; font-family: sans-serif; padding: 20px; }
+            .box { flex: 1; border: 2px solid #ccc; padding: 20px; border-radius: 10px; }
+            .apple-box { border-color: #ffcccb; background: #fff5f5; }
+            .juice-box { border-color: #ffe5b4; background: #fffaf0; }
+            input { width: 100%; margin-bottom: 10px; padding: 8px; box-sizing: border-box; }
+            button { width: 100%; padding: 10px; cursor: pointer; font-weight: bold; }
+        </style>
+
+        <h1>Trading Floor</h1>
+        <div class="container">
+            <div class="box apple-box">
+                <h2>🍎 Apple Trade</h2>
+                <form method="POST">
+                    <input type="hidden" name="trade_type" value="apple">
+                    <label>Seller (Party A):</label>
+                    <input type="text" name="partyA" placeholder="Username" required>
+                    <label>Buyer (Party B):</label>
+                    <input type="text" name="partyB" placeholder="Username" required>
+                    <label>Price (per apple):</label>
+                    <input type="number" step="any" name="price" required>
+                    <label>Volume (Qty):</label>
+                    <input type="number" step="any" name="volume" required>
+                    <button type="submit" style="background: #ff4d4d; color: white;">Execute Apple Trade</button>
+                </form>
+            </div>
+
+            <div class="box juice-box">
+                <h2>🧃 Juice Trade</h2>
+                <form method="POST">
+                    <input type="hidden" name="trade_type" value="juice">
+                    <label>Seller (Party A):</label>
+                    <input type="text" name="partyA" placeholder="Username" required>
+                    <label>Buyer (Party B):</label>
+                    <input type="text" name="partyB" placeholder="Username" required>
+                    <label>Price (per juice):</label>
+                    <input type="number" step="any" name="price" required>
+                    <label>Volume (Qty):</label>
+                    <input type="number" step="any" name="volume" required>
+                    <button type="submit" style="background: #ffa500; color: white;">Execute Juice Trade</button>
+                </form>
+            </div>
+        </div>
+        <p><a href="/dashboard">View Live Dashboard</a></p>
+        ''')
 @app.route('/admin', methods=['GET', 'Post'])
 def admin():
     if request.method == 'POST':
