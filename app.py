@@ -1,6 +1,7 @@
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, redirect
 import os
 from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime, timedelta
 
 # Initialize the Flask application
 app = Flask(__name__)
@@ -26,11 +27,48 @@ class Trades(db.Model):
     juices = db.Column(db.Integer, nullable=True)
     monies = db.Column(db.Integer, nullable=True)
 
+class GameState(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    start_time = db.Column(db.DateTime, nullable=True)
+    is_active = db.Column(db.Boolean, default=False)
+    last_tick = db.Column(db.DateTime, nullable=True) # Last time resources were given
+    
 with app.app_context():
     db.create_all()
     print("Database and tables created")
 
 # Define a "route" (the URL path) and the function that handles it
+
+def tick_game():
+    state = GameState.query.first()
+    if not state or not state.is_active:
+        return
+
+    now = datetime.now()
+    # Check if 60 seconds have passed since the last distribution
+    if state.last_tick is None or now >= state.last_tick + timedelta(seconds=60):
+        # Calculate how many 60-second intervals passed (handles lag)
+        seconds_passed = (now - (state.last_tick or state.start_time)).total_seconds()
+        intervals = int(seconds_passed // 60)
+
+        if intervals > 0:
+            users = Users.query.all()
+            for user in users:
+                # Logic: +5 apples, +5 juices, +10 money per interval
+                user.apples += (5 * intervals)
+                user.juices += (5 * intervals)
+                user.monies += (10 * intervals)
+
+            # Update last_tick to exactly the point where we distributed
+            state.last_tick = (state.last_tick or state.start_time) + timedelta(minutes=intervals)
+            db.session.commit()
+            
+            
+@app.before_request
+def pulse():
+    # Only pulse on specific routes to save database overhead
+    if request.endpoint in ['dashboard']:
+        tick_game()
 @app.route('/')
 def hello_world():
     return 'Hello, World! This is running on my Oracle ARM instance.'
@@ -284,25 +322,75 @@ def input_trade():
         </div>
         <p><a href="/dashboard">View Live Dashboard</a></p>
         ''')
-@app.route('/admin', methods=['GET', 'Post'])
+
+
+@app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if request.method == 'POST':
-        Users.__table__.drop(db.engine)
+        # Safely drop and recreate
+        db.drop_all()
         db.create_all()
-        addUsers(request.form.get('n1'),request.form.get('n2'),request.form.get('n3'),request.form.get('n4'),request.form.get('n5'))
+        default_state = GameState(is_active=False)
+        db.session.add(default_state)
+        # Repopulate
+        addUsers(request.form.get('n1'), request.form.get('n2'),
+                 request.form.get('n3'), request.form.get('n4'),
+                 request.form.get('n5'))
+        return redirect('/admin')
 
-    form_html = '''
-    <h1>Admin Data Entry</h1>
-    <form method="POST">
-        <p>Farmers: <input type="number" step="any" name="n1" required></p>
-        <p>AppleMakers: <input type="number" step="any" name="n2" required></p>
-        <p>Producers: <input type="number" step="any" name="n3" required></p>
-        <p>JuiceMakers: <input type="number" step="any" name="n4" required></p>
-        <p>Consumers: <input type="number" step="any" name="n5" required></p>
-        <button type="submit">Submit Data</button>
-    </form>
+    # Get game state from DB instead of a global variable
+    state = GameState.query.first()
+    is_active = state.is_active if state else False
+
+    status_text = "RUNNING" if is_active else "STOPPED"
+    button_text = "Stop Game" if is_active else "Start Game"
+
+    form_html = f'''
+        <h1>Admin Data Entry</h1>
+        <div style="border: 2px solid #ccc; padding: 15px; margin-bottom: 20px; font-family: sans-serif;">
+            <h3>Game Status: <span style="color: {'green' if is_active else 'red'};">{status_text}</span></h3>
+            <form action="/toggle_game" method="POST">
+                <button type="submit" style="padding: 10px 20px; cursor: pointer;">{button_text}</button>
+            </form>
+        </div>
+
+        <form method="POST" style="font-family: sans-serif;">
+            <h3>Reset & Populate Users</h3>
+            <p>Farmers: <input type="number" name="n1" required></p>
+            <p>AppleMakers: <input type="number" name="n2" required></p>
+            <p>Producers: <input type="number" name="n3" required></p>
+            <p>JuiceMakers: <input type="number" name="n4" required></p>
+            <p>Consumers: <input type="number" name="n5" required></p>
+            <button type="submit" style="background-color: #ff4444; color: white; padding: 10px; border: none; cursor: pointer;">
+                RESET DATABASE & USERS
+            </button>
+        </form>
     '''
     return render_template_string(form_html)
+
+
+@app.route('/toggle_game', methods=['POST'])
+def toggle_game():
+    state = GameState.query.first()
+
+    # If no state exists yet, create the singleton row
+    if not state:
+        state = GameState(is_active=False)
+        db.session.add(state)
+        db.session.commit()  # Commit here to ensure it exists before we modify it
+        state = GameState.query.first()
+
+    if not state.is_active:
+        # STARTING THE GAME
+        state.is_active = True
+        state.start_time = datetime.now()
+        state.last_tick = state.start_time
+    else:
+        # STOPPING THE GAME
+        state.is_active = False
+
+    db.session.commit()
+    return redirect('/admin')
 
 # This block only runs if you execute the script directly (python app.py)
 if __name__ == '__main__':
