@@ -32,12 +32,28 @@ class GameState(db.Model):
     start_time = db.Column(db.DateTime, nullable=True)
     is_active = db.Column(db.Boolean, default=False)
     last_tick = db.Column(db.DateTime, nullable=True) # Last time resources were given
-    
+    production_rate = db.Column(db.Integer, default=50 )
+
 with app.app_context():
     db.create_all()
     print("Database and tables created")
 
 # Define a "route" (the URL path) and the function that handles it
+
+def minuteUpdate():
+    users = Users.query.all()
+    state = GameState.query.first()
+    rate = state.production_rate if state else 50
+    
+    for user in users:
+        if(user.username.startswith("F")):
+            user.apples += 50
+        if(user.username.startswith("C")):
+            user.monies += 5000
+        if(user.username.startswith("P")):
+            produced = min(user.apples, rate)
+            user.apples -= produced
+            user.juices += produced
 
 def tick_game():
     state = GameState.query.first()
@@ -52,12 +68,7 @@ def tick_game():
         intervals = int(seconds_passed // 60)
 
         if intervals > 0:
-            users = Users.query.all()
-            for user in users:
-                # Logic: +5 apples, +5 juices, +10 money per interval
-                user.apples += (5 * intervals)
-                user.juices += (5 * intervals)
-                user.monies += (10 * intervals)
+            minuteUpdate()
 
             # Update last_tick to exactly the point where we distributed
             state.last_tick = (state.last_tick or state.start_time) + timedelta(minutes=intervals)
@@ -341,31 +352,34 @@ def admin():
     # Get game state from DB instead of a global variable
     state = GameState.query.first()
     is_active = state.is_active if state else False
+    current_rate = state.production_rate if state else 50
 
     status_text = "RUNNING" if is_active else "STOPPED"
     button_text = "Stop Game" if is_active else "Start Game"
 
     form_html = f'''
-        <h1>Admin Data Entry</h1>
-        <div style="border: 2px solid #ccc; padding: 15px; margin-bottom: 20px; font-family: sans-serif;">
-            <h3>Game Status: <span style="color: {'green' if is_active else 'red'};">{status_text}</span></h3>
-            <form action="/toggle_game" method="POST">
-                <button type="submit" style="padding: 10px 20px; cursor: pointer;">{button_text}</button>
-            </form>
-        </div>
+            <h1>Admin Control Panel</h1>
 
-        <form method="POST" style="font-family: sans-serif;">
-            <h3>Reset & Populate Users</h3>
-            <p>Farmers: <input type="number" name="n1" required></p>
-            <p>AppleMakers: <input type="number" name="n2" required></p>
-            <p>Producers: <input type="number" name="n3" required></p>
-            <p>JuiceMakers: <input type="number" name="n4" required></p>
-            <p>Consumers: <input type="number" name="n5" required></p>
-            <button type="submit" style="background-color: #ff4444; color: white; padding: 10px; border: none; cursor: pointer;">
-                RESET DATABASE & USERS
-            </button>
-        </form>
-    '''
+            <div style="border: 2px solid #ccc; padding: 15px; margin-bottom: 20px; font-family: sans-serif;">
+                <h3>Game Status: <span style="color: {'green' if is_active else 'red'};">{status_text}</span></h3>
+                <form action="/toggle_game" method="POST" style="display:inline;">
+                    <button type="submit">{button_text}</button>
+                </form>
+
+                <hr>
+
+                <form action="/update_config" method="POST">
+                    <label>P-User Production Rate (Apples -> Juice): </label>
+                    <input type="number" name="production_rate" value="{current_rate}">
+                    <button type="submit">Update Rate</button>
+                </form>
+            </div>
+
+            <form method="POST" style="font-family: sans-serif; border: 1px solid #444; padding: 15px;">
+                <h3>Reset & Populate Users</h3>
+                <button type="submit" style="background-color: #ff4444; color: white;">RESET DATABASE</button>
+            </form>
+        '''
     return render_template_string(form_html)
 
 
@@ -390,6 +404,16 @@ def toggle_game():
         state.is_active = False
 
     db.session.commit()
+    return redirect('/admin')
+
+@app.route('/update_config', methods=['POST'])
+def update_config():
+    state = GameState.query.first()
+    if state:
+        new_rate = request.form.get('production_rate')
+        if new_rate:
+            state.production_rate = int(new_rate)
+            db.session.commit()
     return redirect('/admin')
 
 # This block only runs if you execute the script directly (python app.py)
