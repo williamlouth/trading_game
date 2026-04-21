@@ -1,3 +1,5 @@
+from email.policy import default
+
 from flask import Flask, request, render_template_string, redirect
 import os
 from flask_sqlalchemy import SQLAlchemy
@@ -27,6 +29,14 @@ class Trades(db.Model):
     juices = db.Column(db.Integer, nullable=True)
     monies = db.Column(db.Integer, nullable=True)
 
+class MinuteUpdates(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    party = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    timeOffset = db.Column(db.Integer, nullable=True)
+    apples = db.Column(db.Integer, nullable=True, default=0)
+    juices = db.Column(db.Integer, nullable=True, default=0)
+    monies = db.Column(db.Integer, nullable=True, default=0)
+
 class GameState(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     start_time = db.Column(db.DateTime, nullable=True)
@@ -41,20 +51,32 @@ with app.app_context():
 
 # Define a "route" (the URL path) and the function that handles it
 
-def minuteUpdate():
+def minuteUpdate(current_offset):
+    # Find all update instructions for this specific minute
+    updates = MinuteUpdates.query.filter_by(timeOffset=current_offset).all()
+
+    for update in updates:
+        # Find the specific user this update belongs to
+        user = Users.query.get(update.party)
+        if user:
+            # Apply the changes (defaulting to 0 if the column is None)
+            user.apples = (user.apples or 0) + (update.apples or 0)
+            user.juices = (user.juices or 0) + (update.juices or 0)
+            user.monies = (user.monies or 0) + (update.monies or 0)
+
+            # Safety check: Prevent negative balances if needed
+            user.apples = max(0, user.apples)
+            user.juices = max(0, user.juices)
+            user.monies = max(0, user.monies)
     users = Users.query.all()
     state = GameState.query.first()
     rate = state.production_rate if state else 50
-    
-    for user in users:
-        if(user.username.startswith("F")):
-            user.apples += 50
-        if(user.username.startswith("C")):
-            user.monies += 5000
-        if(user.username.startswith("P")):
-            produced = min(user.apples, rate)
-            user.apples -= produced
-            user.juices += produced
+    for u in users:
+        if u.username.startswith("P"):
+            produced = min(u.apples, rate)
+            u.apples -= produced
+            u.juices += produced
+
 
 def tick_game():
     state = GameState.query.first()
@@ -62,19 +84,30 @@ def tick_game():
         return
 
     now = datetime.now()
-    # Check if 60 seconds have passed since the last distribution
+
+    # Calculate how many minutes have passed since the game started
+    # This is our current "Time Offset"
+    total_seconds_since_start = (now - state.start_time).total_seconds()
+    current_game_minute = int(total_seconds_since_start // 60)
+
+    # Check if we need to tick (if current minute is ahead of the last recorded tick)
+    # We use a 'last_tick_minute' concept here
     if state.last_tick is None or now >= state.last_tick + timedelta(seconds=60):
-        # Calculate how many 60-second intervals passed (handles lag)
-        seconds_passed = (now - (state.last_tick or state.start_time)).total_seconds()
-        intervals = int(seconds_passed // 60)
+        # Calculate how many intervals we missed (usually 1, but handles lag)
+        seconds_passed_since_last_tick = (now - (state.last_tick or state.start_time)).total_seconds()
+        intervals = int(seconds_passed_since_last_tick // 60)
 
         if intervals > 0:
-            minuteUpdate()
+            # If the server lagged and skipped minutes, apply all of them in order
+            last_minute_processed = int(
+                (state.last_tick - state.start_time).total_seconds() // 60) if state.last_tick else -1
 
-            # Update last_tick to exactly the point where we distributed
+            for m in range(last_minute_processed + 1, current_game_minute + 1):
+                minuteUpdate(m)
+
+            # Update last_tick to the current minute mark
             state.last_tick = (state.last_tick or state.start_time) + timedelta(minutes=intervals)
             db.session.commit()
-            
             
 @app.before_request
 def pulse():
@@ -440,6 +473,95 @@ def input_trade():
         ''')
 
 
+@app.route('/schedule')
+def show_schedule():
+    # We join with Users so we can display the name 'F1' instead of ID '1'
+    updates = db.session.query(MinuteUpdates, Users).join(Users, MinuteUpdates.party == Users.id).order_by(
+        MinuteUpdates.timeOffset).all()
+
+    schedule_html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Minute Update Schedule</title>
+        <style>
+            body { font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; padding: 40px; }
+            .container { max-width: 900px; margin: auto; }
+            table { width: 100%; border-collapse: collapse; background: #1e1e1e; border-radius: 8px; overflow: hidden; }
+            th, td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
+            th { background: #252525; color: #888; text-transform: uppercase; font-size: 0.75rem; }
+            .offset { color: #007bff; font-weight: bold; }
+            .plus { color: #00ff88; }
+            .minus { color: #ff4d4d; }
+            h1 { text-align: center; }
+            .nav { text-align: center; margin-bottom: 20px; }
+            .nav a { color: #888; text-decoration: none; margin: 0 15px; border: 1px solid #444; padding: 5px 15px; border-radius: 4px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Ledger: Minute Updates</h1>
+            <div class="nav">
+                <a href="/dashboard">Dashboard</a>
+                <a href="/users">Users</a>
+                <a href="/admin">Admin</a>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Minute (Offset)</th>
+                        <th>User</th>
+                        <th>🍎 Apples</th>
+                        <th>🧃 Juices</th>
+                        <th>💰 Monies</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for update, user in updates %}
+                    <tr>
+                        <td class="offset">T + {{ update.timeOffset }}m</td>
+                        <td><strong>{{ user.username }}</strong></td>
+                        <td class="{{ 'plus' if update.apples > 0 else 'minus' if update.apples < 0 }}">
+                            {{ "+" if update.apples > 0 }}{{ update.apples or 0 }}
+                        </td>
+                        <td class="{{ 'plus' if update.juices > 0 else 'minus' if update.juices < 0 }}">
+                            {{ "+" if update.juices > 0 }}{{ update.juices or 0 }}
+                        </td>
+                        <td class="{{ 'plus' if update.monies > 0 else 'minus' if update.monies < 0 }}">
+                            {{ "+" if update.monies > 0 }}{{ update.monies or 0 }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </body>
+    </html>
+    '''
+    return render_template_string(schedule_html, updates=updates)
+
+def generateFarmer(id, l):
+    for index, item in enumerate(l):
+        update = MinuteUpdates(party = id, timeOffset = index, apples = item)
+        db.session.add(update)
+
+def generate_schedule():
+    users = Users.query.all()
+    farmerCount = 0
+    farmerLists = [
+        [50,70,60,10,10,100,100,50,30,50,20,90,90,60,50],
+        [50,70,60,10,10,100,90,50,30,60,20,100,90,50,50],
+        [50,60,70,20,10,90,100,50,30,50,10,90,100,60,50],
+        [50,60,70,20,10,90,90,50,30,60,10,100,100,50,50]
+    ]
+    for user in users:
+        if user.username.startswith("F"):
+            generateFarmer(user.id, farmerLists[farmerCount])
+            if farmerCount + 1 < len(farmerLists):
+                farmerCount += 1
+
+    db.session.commit()
+
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if request.method == 'POST':
@@ -481,6 +603,8 @@ def admin():
             print("P", counts['P'])
             print("J", counts['J'])
             print("C", counts['C'])
+
+            generate_schedule()
         except Exception as e:
             db.session.rollback()
             print(f"Error during reset: {e}")
