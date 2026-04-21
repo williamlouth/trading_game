@@ -14,6 +14,9 @@ db = SQLAlchemy(app)
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
+    apples = db.Column(db.Float, nullable=True)
+    juices = db.Column(db.Float, nullable=True)
+    monies = db.Column(db.Float, nullable=True)
 
 with app.app_context():
     db.create_all()
@@ -25,7 +28,7 @@ def hello_world():
     return 'Hello, World! This is running on my Oracle ARM instance.'
 
 def addUser(name, apples, juices, monies):
-    new_entry = User(username = name)
+    new_entry = User(username = name, apples = apples, juices = juices, monies = monies)
     db.session.add(new_entry)
     pass
 
