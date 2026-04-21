@@ -215,7 +215,6 @@ def dashboard():
     '''
     return render_template_string(dashboard_html, apple_trades=apple_trades, juice_trades=juice_trades)
 
-
 @app.route('/inputTrade', methods=['GET', 'POST'])
 def input_trade():
     if request.method == 'POST':
@@ -227,22 +226,14 @@ def input_trade():
             price = float(request.form.get('price') or 0)
             volume = float(request.form.get('volume') or 0)
 
-            # GUARD: Price must be positive, but volume can be +/-
-            if price <= 0:
-                return "Price must be a positive number.", 400
-            if volume == 0:
-                return "Volume cannot be zero.", 400
+            if price <= 0: return "Price must be a positive number.", 400
+            if volume == 0: return "Volume cannot be zero.", 400
 
-            # Money moves opposite to the goods
-            # If volume is +, A gives item and receives money
-            # If volume is -, A receives item and gives money
+            # dA/dJ interpretation:
+            # If volume is positive, A is SELLING (giving away goods, receiving money)
+            # If volume is negative, A is BUYING (receiving goods, giving away money)
             money_total = price * volume
-
-            dA, dJ = 0, 0
-            if trade_type == 'apple':
-                dA = volume
-            else:
-                dJ = volume
+            dA, dJ = (volume, 0) if trade_type == 'apple' else (0, volume)
 
         except ValueError:
             return "Invalid numbers entered.", 400
@@ -253,36 +244,76 @@ def input_trade():
         if not user_a or not user_b:
             return "One or both users not found.", 404
 
+        # --- ROLE-BASED VALIDATION LOGIC ---
+        def validate_role(user, delta_apples, delta_juices):
+            name = user.username
+            is_selling_apple = delta_apples > 0
+            is_buying_apple = delta_apples < 0
+            is_selling_juice = delta_juices > 0
+            is_buying_juice = delta_juices < 0
+
+            # Farmer (F): Only sell Apples
+            if name.startswith('F'):
+                if is_buying_apple or is_buying_juice or is_selling_juice:
+                    return "Farmers can only sell apples."
+
+            # Producer (P): Buy Apples, Sell Juice, Max 100 inventory
+            elif name.startswith('P'):
+                if is_selling_apple or is_buying_juice:
+                    return "Producers can only buy apples and sell juice."
+                # Post-trade check for P-users
+                final_apples = user.apples - delta_apples
+                final_juice = user.juices - delta_juices
+                if (final_apples + final_juice) > 100:
+                    return "Producers cannot hold more than 100 total units."
+
+            # AppleMaker (A): Trade Apples only
+            elif name.startswith('A'):
+                if is_selling_juice or is_buying_juice:
+                    return "AppleMakers can only trade apples."
+
+            # JuiceMaker (J): Trade Juice only
+            elif name.startswith('J'):
+                if is_selling_apple or is_buying_apple:
+                    return "JuiceMakers can only trade juice."
+
+            # Consumer (C): Buy only
+            elif name.startswith('C'):
+                if is_selling_apple or is_selling_juice:
+                    return "Consumers can only buy, not sell."
+
+            return None
+
+        # Validate Party A (The Taker)
+        error_a = validate_role(user_a, dA, dJ)
+        if error_a: return f"Party A Error: {error_a}", 400
+
+        # Validate Party B (The Maker - direction is inverted)
+        error_b = validate_role(user_b, -dA, -dJ)
+        if error_b: return f"Party B Error: {error_b}", 400
+        # -----------------------------------
+
         # Calculate new balances
-        # Subtract dA from user_a (if dA is negative, it adds to user_a)
-        new_a_apples, new_b_apples = user_a.apples + dA, user_b.apples - dA
-        new_a_juices, new_b_juices = user_a.juices + dJ, user_b.juices - dJ
+        new_a_apples, new_b_apples = user_a.apples - dA, user_b.apples + dA
+        new_a_juices, new_b_juices = user_a.juices - dJ, user_b.juices + dJ
+        new_a_monies, new_b_monies = user_a.monies + money_total, user_b.monies - money_total
 
-        # Money logic: user_a receives money_total
-        # If money_total is +, user_a balance goes up. If -, it goes down.
-        new_a_monies, new_b_monies = user_a.monies - money_total, user_b.monies + money_total
-
-        # CHECK: Nothing Negative
+        # Final Balance Check (Safety Net)
         balances = [new_a_apples, new_a_juices, new_a_monies,
                     new_b_apples, new_b_juices, new_b_monies]
 
         if any(b < 0 for b in balances):
-            return "Trade Rejected: Insufficient funds or stock for this operation.", 400
+            return "Trade Rejected: Insufficient funds or stock.", 400
 
         try:
             user_a.apples, user_b.apples = new_a_apples, new_b_apples
             user_a.juices, user_b.juices = new_a_juices, new_b_juices
             user_a.monies, user_b.monies = new_a_monies, new_b_monies
 
-            # Record trade in DB
-            new_trade = Trades(
-                partyA=user_a.id, partyB=user_b.id,
-                apples=dA, juices=dJ, monies=-money_total
-            )
-
+            new_trade = Trades(partyA=user_a.id, partyB=user_b.id, apples=dA, juices=dJ, monies=-money_total)
             db.session.add(new_trade)
             db.session.commit()
-            return f"Trade successful! Volume: {volume}, Price: {price} <a href='/inputTrade'>Back</a>"
+            return f"Trade successful! <a href='/inputTrade'>Back</a>"
         except Exception as e:
             db.session.rollback()
             return f"Error: {str(e)}", 500
