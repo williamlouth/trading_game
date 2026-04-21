@@ -697,6 +697,7 @@ def toggle_game():
         state.is_active = True
         state.start_time = datetime.now()
         state.last_tick = state.start_time
+        minuteUpdate(0)
     else:
         # STOPPING THE GAME
         state.is_active = False
