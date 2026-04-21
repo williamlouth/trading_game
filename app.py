@@ -59,6 +59,114 @@ def addUsers(noFarmers, noAppleMakers, noProducers, noJuiceMakers, noConsumers):
         return "Please enter valid numbers", 400
 
 
+@app.route('/dashboard')
+def dashboard():
+    all_trades = Trades.query.order_by(Trades.id.desc()).all()
+
+    # Filtering logic
+    apple_trades = [t for t in all_trades if t.apples != 0 and t.monies != 0 and t.juices == 0]
+    juice_trades = [t for t in all_trades if t.juices != 0 and t.monies != 0 and t.apples == 0]
+
+    dashboard_html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta http-equiv="refresh" content="5">
+        <style>
+            body { font-family: 'Courier New', Courier, monospace; background: #121212; color: #e0e0e0; }
+            .container { display: flex; gap: 30px; padding: 20px; justify-content: center; }
+            .column { flex: 1; max-width: 500px; }
+            table { width: 100%; border-collapse: collapse; background: #1e1e1e; table-layout: fixed; }
+            th, td { padding: 12px 8px; text-align: right; border-bottom: 1px solid #333; }
+
+            /* Header Styling */
+            th { color: #888; font-size: 0.75rem; text-transform: uppercase; }
+            .col-arrow { width: 50px; text-align: center; }
+            .col-price { width: 100px; }
+            .col-size { width: 100px; }
+
+            /* Color and Arrow Logic */
+            .buy { color: #00ff88; }
+            .sell { color: #ff4d4d; }
+
+            .big-arrow { 
+                font-size: 4rem; 
+                font-weight: bold; 
+                display: block;
+                text-align: center;
+            }
+
+            h1, h2 { text-align: center; color: #ffffff; margin-bottom: 10px; }
+            .price-cell { font-weight: bold; font-size: 1.2rem; }
+            .size-cell { font-size: 1.1rem; }
+        </style>
+    </head>
+    <body>
+        <h1>Market Tape</h1>
+        <div class="container">
+
+            <div class="column">
+                <h2>🍎 Apples</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-arrow">Dir</th>
+                            <th class="col-price">Price</th>
+                            <th class="col-size">Size</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for t in apple_trades %}
+                            {% set is_sell = t.apples > 0 %}
+                            {% set price = (t.monies / t.apples) | abs %}
+                            <tr class="{{ 'sell' if is_sell else 'buy' }}">
+                                <td class="col-arrow">
+                                    <span class="big-arrow">{{ '↓' if is_sell else '↑' }}</span>
+                                </td>
+                                <td class="price-cell">{{ "{:.2f}".format(price) }}</td>
+                                <td class="size-cell">{{ "-" if is_sell }}{{ t.apples | abs }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="column">
+                <h2>🧃 Juices</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-arrow">Dir</th>
+                            <th class="col-price">Price</th>
+                            <th class="col-size">Size</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for t in juice_trades %}
+                            {% set is_sell = t.juices > 0 %}
+                            {% set price = (t.monies / t.juices) | abs %}
+                            <tr class="{{ 'sell' if is_sell else 'buy' }}">
+                                <td class="col-arrow">
+                                    <span class="big-arrow">{{ '↓' if is_sell else '↑' }}</span>
+                                </td>
+                                <td class="price-cell">{{ "{:.2f}".format(price) }}</td>
+                                <td class="size-cell">{{ "-" if is_sell }}{{ t.juices | abs }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+        </div>
+        <div style="text-align: center; margin-top: 30px;">
+            <a href="/inputTrade" style="color: #666; text-decoration: none; border: 1px solid #444; padding: 10px 20px; border-radius: 5px;">[ Enter New Trade ]</a>
+        </div>
+    </body>
+    </html>
+    '''
+    return render_template_string(dashboard_html, apple_trades=apple_trades, juice_trades=juice_trades)
+
+
 @app.route('/inputTrade', methods=['GET', 'POST'])
 def input_trade():
     if request.method == 'POST':
@@ -98,12 +206,12 @@ def input_trade():
 
         # Calculate new balances
         # Subtract dA from user_a (if dA is negative, it adds to user_a)
-        new_a_apples, new_b_apples = user_a.apples - dA, user_b.apples + dA
-        new_a_juices, new_b_juices = user_a.juices - dJ, user_b.juices + dJ
+        new_a_apples, new_b_apples = user_a.apples + dA, user_b.apples - dA
+        new_a_juices, new_b_juices = user_a.juices + dJ, user_b.juices - dJ
 
         # Money logic: user_a receives money_total
         # If money_total is +, user_a balance goes up. If -, it goes down.
-        new_a_monies, new_b_monies = user_a.monies + money_total, user_b.monies - money_total
+        new_a_monies, new_b_monies = user_a.monies - money_total, user_b.monies + money_total
 
         # CHECK: Nothing Negative
         balances = [new_a_apples, new_a_juices, new_a_monies,
@@ -146,9 +254,9 @@ def input_trade():
                 <h2>🍎 Apple Trade</h2>
                 <form method="POST">
                     <input type="hidden" name="trade_type" value="apple">
-                    <label>Seller (Party A):</label>
+                    <label>Taker (Party A):</label>
                     <input type="text" name="partyA" placeholder="Username" required>
-                    <label>Buyer (Party B):</label>
+                    <label>Market Maker (Party B):</label>
                     <input type="text" name="partyB" placeholder="Username" required>
                     <label>Price (per apple):</label>
                     <input type="number" step="any" name="price" required>
@@ -162,9 +270,9 @@ def input_trade():
                 <h2>🧃 Juice Trade</h2>
                 <form method="POST">
                     <input type="hidden" name="trade_type" value="juice">
-                    <label>Seller (Party A):</label>
+                    <label>Taker (Party A):</label>
                     <input type="text" name="partyA" placeholder="Username" required>
-                    <label>Buyer (Party B):</label>
+                    <label>Market Maker (Party B):</label>
                     <input type="text" name="partyB" placeholder="Username" required>
                     <label>Price (per juice):</label>
                     <input type="number" step="any" name="price" required>
