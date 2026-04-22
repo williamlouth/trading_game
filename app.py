@@ -679,6 +679,166 @@ def consumer_targets():
     )
 
 
+@app.route('/results')
+def results():
+    users = Users.query.all()
+    all_updates = MinuteUpdates.query.all()
+    all_trades = Trades.query.all()
+
+    results_data = {
+        'Farmers (F)': [],
+        'AppleMakers (A)': [],
+        'Producers (P)': [],
+        'JuiceMakers (J)': [],
+        'Consumers (C)': []
+    }
+
+    for u in users:
+        prefix = u.username[0]
+        category = {
+            'F': 'Farmers (F)',
+            'A': 'AppleMakers (A)',
+            'P': 'Producers (P)',
+            'J': 'JuiceMakers (J)',
+            'C': 'Consumers (C)'
+        }.get(prefix)
+
+        if not category: continue
+
+        if prefix != 'C':
+            # Standard Ranking for non-consumers
+            results_data[category].append({
+                'username': u.username,
+                'monies': u.monies or 0,
+                'apples': u.apples or 0,
+                'juices': u.juices or 0
+            })
+        else:
+            # --- Consumer Fulfillment Logic (Capped per minute) ---
+            total_possible_points = 0
+            total_earned_points = 0
+
+            # Get all minutes where this consumer had a target
+            updates = MinuteUpdates.query.filter_by(party=u.id).all()
+
+            for up in updates:
+                m = up.timeOffset
+                target_apples = max(0, up.apples or 0)
+                target_juices = max(0, up.juices or 0)
+                minute_target_total = target_apples + target_juices
+
+                if minute_target_total == 0:
+                    continue
+
+                total_possible_points += minute_target_total
+
+                # Find all trades this user did in THIS specific minute
+                trades_this_min = Trades.query.filter(
+                    ((Trades.partyA == u.id) | (Trades.partyB == u.id)),
+                    (Trades.timeOffset == m)
+                ).all()
+
+                # Calculate what they actually bought this minute
+                bought_apples = 0
+                bought_juices = 0
+                for tr in trades_this_min:
+                    if tr.partyA == u.id:
+                        bought_apples += (tr.apples or 0)
+                        bought_juices += (tr.juices or 0)
+                    else:
+                        # PartyB is the Maker (Inverse delta)
+                        bought_apples -= (tr.apples or 0)
+                        bought_juices -= (tr.juices or 0)
+
+                # Cap the fulfillment: You can't get more than the target per resource
+                # and we ensure negative progress isn't possible per your "buy only" rule
+                earned_apples = min(max(0, bought_apples), target_apples)
+                earned_juices = min(max(0, bought_juices), target_juices)
+
+                total_earned_points += (earned_apples + earned_juices)
+
+            fulfillment = (total_earned_points / total_possible_points * 100) if total_possible_points > 0 else 0
+
+            results_data[category].append({
+                'username': u.username,
+                'monies': u.monies or 0,
+                'fulfillment': round(fulfillment, 2),
+                'score': total_earned_points,
+                'max_score': total_possible_points
+            })
+
+    # Sort the lists
+    for key in results_data:
+        if key == 'Consumers (C)':
+            # Rank 1: Fulfillment % | Rank 2: Final Money
+            results_data[key].sort(key=lambda x: (x['fulfillment'], x['monies']), reverse=True)
+        else:
+            results_data[key].sort(key=lambda x: x['monies'], reverse=True)
+
+    results_html = '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Game Results</title>
+            <style>
+                body { font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; padding: 20px; }
+                .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+                .card { background: #1e1e1e; padding: 15px; border-radius: 8px; border: 1px solid #333; }
+                h2 { border-bottom: 2px solid #444; padding-bottom: 10px; color: #fff; }
+                table { width: 100%; border-collapse: collapse; }
+                th, td { text-align: left; padding: 8px; border-bottom: 1px solid #222; }
+                .winner { background: rgba(0, 255, 136, 0.1); }
+                .rank-1 { color: #ffd700; font-weight: bold; } /* Gold */
+                .money { color: #00ff88; font-family: monospace; }
+                .fulfill { color: #007bff; font-weight: bold; }
+            </style>
+        </head>
+        <body>
+            <h1 style="text-align:center">Final Leaderboard</h1>
+            <div class="grid">
+                {% for category, players in data.items() %}
+                <div class="card">
+                    <h2>{{ category }}</h2>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>User</th>
+                                {% if category == 'Consumers (C)' %}
+                                    <th>Fulfillment</th>
+                                    <th>Cash</th>
+                                {% else %}
+                                    <th>Cash</th>
+                                    <th>Stock (A/J)</th>
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for p in players %}
+                            <tr class="{{ 'winner' if loop.first else '' }}">
+                                <td class="{{ 'rank-1' if loop.first else '' }}">
+                                    {{ "🏆 " if loop.first }}{{ p.username }}
+                                </td>
+                                {% if category == 'Consumers (C)' %}
+                                    <td class="fulfill">{{ p.fulfillment }}%</td>
+                                    <td class="money">${{ "{:,.2f}".format(p.monies) }}</td>
+                                {% else %}
+                                    <td class="money">${{ "{:,.2f}".format(p.monies) }}</td>
+                                    <td style="font-size:0.8rem; color:#888;">{{ p.apples }} / {{ p.juices }}</td>
+                                {% endif %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endfor %}
+            </div>
+            <p style="text-align:center; margin-top:40px;"><a href="/dashboard" style="color:#666;">Back to Dashboard</a></p>
+        </body>
+        </html>
+        '''
+    # Use the same results_html template provided in the previous step
+    return render_template_string(results_html, data=results_data)
+
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if request.method == 'POST':
