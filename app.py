@@ -762,6 +762,7 @@ def consumer_targets():
 @app.route('/results')
 def results():
     users = Users.query.all()
+    user_map = {u.id: u.username for u in users}
     all_updates = MinuteUpdates.query.all()
     all_trades = Trades.query.all()
 
@@ -855,69 +856,155 @@ def results():
         else:
             results_data[key].sort(key=lambda x: x['monies'], reverse=True)
 
+    # Helper to get usernames by ID for the highlights
+    h = {
+        'apple_best_buy': None, 'apple_worst_buy': None,
+        'apple_best_sell': None, 'apple_worst_sell': None,
+        'apple_big': None,
+        'juice_best_buy': None, 'juice_worst_buy': None,
+        'juice_best_sell': None, 'juice_worst_sell': None,
+        'juice_big': None
+    }
+
+    for t in all_trades:
+        is_apple = (t.apples != 0 and t.apples is not None)
+        res = 'apple' if is_apple else 'juice'
+        raw_vol = t.apples if is_apple else t.juices
+        if not raw_vol: continue
+
+        abs_vol = abs(raw_vol)
+        price = abs(t.monies / raw_vol)
+
+        # 1. Volume Record (Either direction)
+        big_key = f"{res}_big"
+        if not h[big_key] or abs_vol > abs(h[big_key].apples or h[big_key].juices):
+            h[big_key] = t
+
+        # 2. Buy Records (Taker A bought, so raw_vol > 0)
+        if raw_vol > 0:
+            # Best Buy = Lowest Price
+            k_best = f"{res}_best_buy"
+            if not h[k_best] or price < abs(h[k_best].monies / (h[k_best].apples or h[k_best].juices)):
+                h[k_best] = t
+            # Worst Buy = Highest Price
+            k_worst = f"{res}_worst_buy"
+            if not h[k_worst] or price > abs(h[k_worst].monies / (h[k_worst].apples or h[k_worst].juices)):
+                h[k_worst] = t
+
+        # 3. Sell Records (Taker A sold, so raw_vol < 0)
+        else:
+            # Best Sell = Highest Price
+            k_best = f"{res}_best_sell"
+            if not h[k_best] or price > abs(h[k_best].monies / (h[k_best].apples or h[k_best].juices)):
+                h[k_best] = t
+            # Worst Sell = Lowest Price
+            k_worst = f"{res}_worst_sell"
+            if not h[k_worst] or price < abs(h[k_worst].monies / (h[k_worst].apples or h[k_worst].juices)):
+                h[k_worst] = t
+
+    # Template Logic
+    # Define the awards we want to display
+    awards = [
+        ('apple_best_buy', '🍎 Best Apple Buy (Lowest)'),
+        ('apple_worst_buy', '🍎 Worst Apple Buy (Highest)'),
+        ('apple_best_sell', '🍎 Best Apple Sell (Highest)'),
+        ('apple_worst_sell', '🍎 Worst Apple Sell (Lowest)'),
+        ('apple_big', '🍎 Largest Apple Trade'),
+        ('juice_best_buy', '🧃 Best Juice Buy (Lowest)'),
+        ('juice_worst_buy', '🧃 Worst Juice Buy (Highest)'),
+        ('juice_best_sell', '🧃 Best Juice Sell (Highest)'),
+        ('juice_worst_sell', '🧃 Worst Juice Sell (Lowest)'),
+        ('juice_big', '🧃 Largest Juice Trade')
+    ]
+
     results_html = '''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Game Results</title>
-            <style>
-                body { font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; padding: 20px; }
-                .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-                .card { background: #1e1e1e; padding: 15px; border-radius: 8px; border: 1px solid #333; }
-                h2 { border-bottom: 2px solid #444; padding-bottom: 10px; color: #fff; }
-                table { width: 100%; border-collapse: collapse; }
-                th, td { text-align: left; padding: 8px; border-bottom: 1px solid #222; }
-                .winner { background: rgba(0, 255, 136, 0.1); }
-                .rank-1 { color: #ffd700; font-weight: bold; } /* Gold */
-                .money { color: #00ff88; font-family: monospace; }
-                .fulfill { color: #007bff; font-weight: bold; }
-            </style>
-        </head>
-        <body>
-            <h1 style="text-align:center">Final Leaderboard</h1>
-            <div class="grid">
-                {% for category, players in data.items() %}
-                <div class="card">
-                    <h2>{{ category }}</h2>
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Final Market Results</title>
+                <style>
+                    body { font-family: 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 20px; }
+                    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 40px; }
+                    .card { background: #161616; padding: 20px; border-radius: 12px; border: 1px solid #222; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+                    h2 { border-bottom: 1px solid #333; padding-bottom: 12px; color: #fff; font-size: 1.1rem; text-transform: uppercase; letter-spacing: 1px; }
+                    table { width: 100%; border-collapse: collapse; }
+                    th { text-align: left; color: #666; font-size: 0.7rem; text-transform: uppercase; padding: 10px; }
+                    td { padding: 12px 10px; border-bottom: 1px solid #1f1f1f; font-size: 0.9rem; }
+                    .money { color: #00ff88; font-family: 'Courier New', monospace; }
+                    .user-tag { color: #007bff; font-weight: bold; }
+                    .val-tag { color: #ffd700; font-weight: bold; font-family: 'Courier New', monospace; }
+                    .time-tag { color: #888; font-style: italic; font-size: 0.8rem; }
+                    .award-name { color: #aaa; font-weight: bold; font-size: 0.85rem; }
+                </style>
+            </head>
+            <body>
+                <h1 style="text-align:center; letter-spacing: 4px; margin-bottom: 40px;">MARKET RECAP</h1>
+
+                <div class="grid">
+                    {% for category, players in data.items() %}
+                    <div class="card">
+                        <h2>{{ category }}</h2>
+                        <table>
+                            <thead>
+                                <tr><th>User</th><th style="text-align:right">Metric</th><th style="text-align:right">Cash</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for p in players %}
+                                <tr>
+                                    <td>{{ "🏆 " if loop.first }}{{ p.username }}</td>
+                                    <td style="text-align:right">{{ p.fulfillment if 'C' in category else p.apples ~ 'A/' ~ p.juices ~ 'J' }}{{ '%' if 'C' in category }}</td>
+                                    <td class="money" style="text-align:right">${{ "{:,.2f}".format(p.monies) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="card" style="max-width: 1000px; margin: 0 auto; border-color: #ffd700;">
+                    <h2 style="color: #ffd700;">🌟 Market Hall of Fame</h2>
                     <table>
                         <thead>
                             <tr>
-                                <th>User</th>
-                                {% if category == 'Consumers (C)' %}
-                                    <th>Fulfillment</th>
-                                    <th>Cash</th>
-                                {% else %}
-                                    <th>Cash</th>
-                                    <th>Stock (A/J)</th>
-                                {% endif %}
+                                <th>Record</th>
+                                <th>Party A (Taker)</th>
+                                <th>Party B (Maker)</th>
+                                <th style="text-align:right">Price</th>
+                                <th style="text-align:right">Volume</th>
+                                <th style="text-align:right">Time</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for p in players %}
-                            <tr class="{{ 'winner' if loop.first else '' }}">
-                                <td class="{{ 'rank-1' if loop.first else '' }}">
-                                    {{ "🏆 " if loop.first }}{{ p.username }}
-                                </td>
-                                {% if category == 'Consumers (C)' %}
-                                    <td class="fulfill">{{ p.fulfillment }}%</td>
-                                    <td class="money">${{ "{:,.2f}".format(p.monies) }}</td>
-                                {% else %}
-                                    <td class="money">${{ "{:,.2f}".format(p.monies) }}</td>
-                                    <td style="font-size:0.8rem; color:#888;">{{ p.apples }} / {{ p.juices }}</td>
-                                {% endif %}
-                            </tr>
+                            {% for key, label in awards %}
+                            {% set t = h[key] %}
+                            {% if t %}
+                                {% set is_apple = (t.apples != 0) %}
+                                {% set raw_vol = t.apples if is_apple else t.juices %}
+                                {% set price = (t.monies / raw_vol) | abs %}
+                                
+                                <tr>
+                                    <td class="award-name">{{ label }}</td>
+                                    <td class="user-tag">{{ um[t.partyA] }}</td>
+                                    <td class="user-tag">{{ um[t.partyB] }}</td>
+                                    <td class="val-tag" style="text-align:right">${{ "{:.2f}".format(price) }}</td>
+                                    <td class="val-tag" style="text-align:right; color: {{ '#ff4d4d' if raw_vol < 0 else '#00ff88' }};">
+                                        {{ raw_vol | int }}
+                                    </td>
+                                    <td class="time-tag" style="text-align:right">T + {{ t.timeOffset }}m</td>
+                                </tr>
+                            {% endif %}
                             {% endfor %}
                         </tbody>
                     </table>
                 </div>
-                {% endfor %}
-            </div>
-            <p style="text-align:center; margin-top:40px;"><a href="/dashboard" style="color:#666;">Back to Dashboard</a></p>
-        </body>
-        </html>
+
+                <p style="text-align:center; margin-top:50px;"><a href="/dashboard" style="color:#444; text-decoration:none;">[ RETURN TO DASHBOARD ]</a></p>
+            </body>
+            </html>
         '''
-    # Use the same results_html template provided in the previous step
-    return render_template_string(results_html, data=results_data)
+    return render_template_string(results_html, data=results_data, h=h, um=user_map, awards=awards)
+
 
 @app.route('/adjust', methods=['GET', 'POST'])
 def adjust_user():
