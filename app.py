@@ -64,14 +64,11 @@ def minuteUpdate(current_offset):
         if user:
             # Apply the changes (defaulting to 0 if the column is None)
             if user.username.startswith("F"):
+                user.apples = min(100, user.apples)
                 user.apples = (user.apples or 0) + (update.apples or 0)
                 user.juices = (user.juices or 0) + (update.juices or 0)
                 user.monies = (user.monies or 0) + (update.monies or 0)
 
-                # Safety check: Prevent negative balances if needed
-                user.apples = max(0, user.apples)
-                user.juices = max(0, user.juices)
-                user.monies = max(0, user.monies)
     users = Users.query.all()
     state = GameState.query.first()
     rate = state.production_rate if state else 50
