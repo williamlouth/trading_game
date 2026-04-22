@@ -28,6 +28,7 @@ class Trades(db.Model):
     apples = db.Column(db.Integer, nullable=True)
     juices = db.Column(db.Integer, nullable=True)
     monies = db.Column(db.Integer, nullable=True)
+    timeOffset = db.Column(db.Integer, nullable=True)
 
 class MinuteUpdates(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -328,6 +329,7 @@ def input_trade():
         name_b = request.form.get('partyB')
 
         try:
+            timeOffset = request.form.get('timeOffset')
             price = float(request.form.get('price') or 0)
             volume = float(request.form.get('volume') or 0)
 
@@ -417,7 +419,7 @@ def input_trade():
             user_a.juices, user_b.juices = new_a_juices, new_b_juices
             user_a.monies, user_b.monies = new_a_monies, new_b_monies
 
-            new_trade = Trades(partyA=user_a.id, partyB=user_b.id, apples=dA, juices=dJ, monies=-money_total)
+            new_trade = Trades(partyA=user_a.id, partyB=user_b.id, apples=dA, juices=dJ, monies=-money_total, timeOffset = timeOffset)
             db.session.add(new_trade)
             db.session.commit()
             return f"Trade successful! <a href='/inputTrade'>Back</a>"
@@ -445,6 +447,8 @@ def input_trade():
                     <input type="text" name="partyA" placeholder="Username" required>
                     <label>Market Maker (Party B):</label>
                     <input type="text" name="partyB" placeholder="Username" required>
+                    <label>Minute:</label>
+                    <input type="number" name="timeOffset" placeholder="0" required>
                     <label>Price (per apple):</label>
                     <input type="number" step="any" name="price" required>
                     <label>Volume (Qty):</label>
@@ -461,6 +465,8 @@ def input_trade():
                     <input type="text" name="partyA" placeholder="Username" required>
                     <label>Market Maker (Party B):</label>
                     <input type="text" name="partyB" placeholder="Username" required>
+                    <label>Minute:</label>
+                    <input type="number" name="timeOffset" placeholder="0" required>
                     <label>Price (per juice):</label>
                     <input type="number" step="any" name="price" required>
                     <label>Volume (Qty):</label>
