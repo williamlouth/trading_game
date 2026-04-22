@@ -1,5 +1,5 @@
-from email.policy import default
 
+from flask import flash, get_flashed_messages  # Ensure these are imported at the top
 from flask import Flask, request, render_template_string, redirect
 import os
 from flask_sqlalchemy import SQLAlchemy
@@ -121,7 +121,7 @@ def tick_game():
 @app.before_request
 def pulse():
     # Only pulse on specific routes to save database overhead
-    if request.endpoint in ['dashboard','consumer-targets']:
+    if request.endpoint in ['dashboard','consumer_targets']:
         tick_game()
         
 @app.route('/')
@@ -406,7 +406,6 @@ def show_users():
     return render_template_string(users_html, users=all_users)
 
 
-from flask import flash, get_flashed_messages  # Ensure these are imported at the top
 
 
 def validate_role(user, delta_apples, delta_juices, delta_monies, capacity):
@@ -452,8 +451,8 @@ def input_trade():
 
         try:
             t_offset = int(request.form.get('timeOffset') or 0)
-            price = float(request.form.get('price') or 0)
-            volume = float(request.form.get('volume') or 0)
+            price = int(request.form.get('price') or 0)
+            volume = int(request.form.get('volume') or 0)
 
             if price <= 0:
                 flash("Error: Price must be positive.", "error")
