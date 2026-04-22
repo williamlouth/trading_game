@@ -55,6 +55,7 @@ with app.app_context():
 
 def minuteUpdate(current_offset):
     # Find all update instructions for this specific minute
+    print("minute update", current_offset)
     updates = MinuteUpdates.query.filter_by(timeOffset=current_offset).all()
 
     for update in updates:
@@ -63,6 +64,7 @@ def minuteUpdate(current_offset):
         if user:
             # Apply the changes (defaulting to 0 if the column is None)
             if user.username.startswith("F"):
+                user.apples = (user.apples or 0) + (update.apples or 0)
                 user.juices = (user.juices or 0) + (update.juices or 0)
                 user.monies = (user.monies or 0) + (update.monies or 0)
 
@@ -1116,6 +1118,7 @@ def toggle_game():
         state.is_active = True
         state.start_time = datetime.now()
         state.last_tick = state.start_time
+        db.session.commit()
         minuteUpdate(0)
     else:
         # STOPPING THE GAME
