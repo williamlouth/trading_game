@@ -116,9 +116,84 @@ def pulse():
     # Only pulse on specific routes to save database overhead
     if request.endpoint in ['dashboard']:
         tick_game()
+        
 @app.route('/')
 def hello_world():
-    return 'Hello, World! This is running on my Oracle ARM instance.'
+    index_html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Trading Game Terminal</title>
+        <style>
+            body { 
+                font-family: 'Courier New', Courier, monospace; 
+                background: #0a0a0a; 
+                color: #ffffff; 
+                display: flex; 
+                justify-content: center; 
+                align-items: center; 
+                height: 100vh; 
+                margin: 0; 
+                overflow: hidden;
+            }
+            .welcome-container { 
+                text-align: center; 
+                padding: 60px; 
+                border: 1px solid #333; 
+                background: linear-gradient(145deg, #111, #050505); 
+                box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+                max-width: 700px;
+                border-radius: 4px;
+            }
+            .logo {
+                font-size: 3.5rem;
+                font-weight: bold;
+                letter-spacing: 10px;
+                margin-bottom: 20px;
+                background: linear-gradient(to right, #00ff88, #007bff);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            .divider {
+                height: 2px;
+                width: 100px;
+                background: #00ff88;
+                margin: 20px auto;
+            }
+            h2 { 
+                font-size: 1.2rem; 
+                color: #888; 
+                text-transform: uppercase; 
+                letter-spacing: 5px;
+                margin-top: 0;
+            }
+            p { 
+                color: #666; 
+                font-size: 1rem; 
+                line-height: 1.6;
+                margin-top: 20px;
+            }
+            .status-line {
+                margin-top: 40px;
+                font-size: 0.7rem;
+                color: #222;
+                text-transform: uppercase;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="welcome-container">
+            <div class="logo">THE TRADING GAME</div>
+            <div class="divider"></div>
+            <p>
+                Welcome to the Apple & Juice exchange. <br>
+                Monitor the tape, fill your targets, and manage your capital.
+            </p>
+        </div>
+    </body>
+    </html>
+    '''
+    return render_template_string(index_html)
 
 
 def addUser(name, apples, juices, monies):
