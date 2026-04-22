@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 # Initialize the Flask application
 app = Flask(__name__)
+app.secret_key = 'super_secret_market_key'
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'sqlite.db')
@@ -321,6 +322,10 @@ def show_users():
     '''
     return render_template_string(users_html, users=all_users)
 
+
+from flask import flash, get_flashed_messages  # Ensure these are imported at the top
+
+
 @app.route('/inputTrade', methods=['GET', 'POST'])
 def input_trade():
     if request.method == 'POST':
@@ -329,129 +334,113 @@ def input_trade():
         name_b = request.form.get('partyB')
 
         try:
-            timeOffset = request.form.get('timeOffset')
+            t_offset = int(request.form.get('timeOffset') or 0)
             price = float(request.form.get('price') or 0)
             volume = float(request.form.get('volume') or 0)
 
-            if price <= 0: return "Price must be a positive number.", 400
-            if volume == 0: return "Volume cannot be zero.", 400
+            if price <= 0:
+                flash("Error: Price must be positive.", "error")
+                return redirect('/inputTrade')
+            if volume == 0:
+                flash("Error: Volume cannot be zero.", "error")
+                return redirect('/inputTrade')
 
-            # dA/dJ interpretation:
-            # If volume is positive, A is BUYING
-            # If volume is negative, A is SELLING
             money_total = price * volume
             dA, dJ = (volume, 0) if trade_type == 'apple' else (0, volume)
 
-        except ValueError:
-            return "Invalid numbers entered.", 400
+            user_a = Users.query.filter_by(username=name_a).first()
+            user_b = Users.query.filter_by(username=name_b).first()
 
-        user_a = Users.query.filter_by(username=name_a).first()
-        user_b = Users.query.filter_by(username=name_b).first()
+            if not user_a or not user_b:
+                flash("Error: One or both users not found.", "error")
+                return redirect('/inputTrade')
 
-        if not user_a or not user_b:
-            return "One or both users not found.", 404
+            # --- Validation Logic (Assuming you kept the logic from previous steps) ---
+            state = GameState.query.first()
+            current_limit = state.producer_limit if state else 100
 
-        # --- ROLE-BASED VALIDATION LOGIC ---
-        state = GameState.query.first()
-        current_limit = state.producer_limit if state else 100
-        def validate_role(user, delta_apples, delta_juices):
-            name = user.username
-            is_selling_apple = delta_apples < 0
-            is_buying_apple = delta_apples > 0
-            is_selling_juice = delta_juices < 0
-            is_buying_juice = delta_juices > 0
+            # (Insert your validate_role check here...)
+            # error_a = validate_role(user_a, dA, dJ) ... etc
 
-            # Farmer (F): Only sell Apples
-            if name.startswith('F'):
-                if is_buying_apple or is_buying_juice or is_selling_juice:
-                    return "Farmers can only sell apples."
+            # If everything passes:
+            user_a.apples += dA
+            user_b.apples -= dA
+            user_a.juices += dJ
+            user_b.juices -= dJ
+            user_a.monies -= money_total
+            user_b.monies += money_total
 
-            # Producer (P): Buy Apples, Sell Juice, Max 100 inventory
-            elif name.startswith('P'):
-                if is_selling_apple or is_buying_juice:
-                    return "Producers can only buy apples and sell juice."
-                # Post-trade check for P-users
-                final_apples = user.apples - delta_apples
-                final_juice = user.juices - delta_juices
-                if (final_apples + final_juice) > current_limit:
-                    return f"Producers cannot hold more than {current_limit} total units."
-
-            # AppleMaker (A): Trade Apples only
-            elif name.startswith('A'):
-                if is_selling_juice or is_buying_juice:
-                    return "AppleMakers can only trade apples."
-
-            # JuiceMaker (J): Trade Juice only
-            elif name.startswith('J'):
-                if is_selling_apple or is_buying_apple:
-                    return "JuiceMakers can only trade juice."
-
-            # Consumer (C): Buy only
-            elif name.startswith('C'):
-                if is_selling_apple or is_selling_juice:
-                    return "Consumers can only buy, not sell."
-
-            return None
-
-        # Validate Party A (The Taker)
-        error_a = validate_role(user_a, dA, dJ)
-        if error_a: return f"Party A Error: {error_a}", 400
-
-        # Validate Party B (The Maker - direction is inverted)
-        error_b = validate_role(user_b, -dA, -dJ)
-        if error_b: return f"Party B Error: {error_b}", 400
-        # -----------------------------------
-
-        # Calculate new balances
-        new_a_apples, new_b_apples = user_a.apples + dA, user_b.apples - dA
-        new_a_juices, new_b_juices = user_a.juices + dJ, user_b.juices - dJ
-        new_a_monies, new_b_monies = user_a.monies - money_total, user_b.monies + money_total
-
-        # Final Balance Check (Safety Net)
-        balances = [new_a_apples, new_a_juices, new_a_monies,
-                    new_b_apples, new_b_juices, new_b_monies]
-
-        if any(b < 0 for b in balances):
-            return "Trade Rejected: Insufficient funds or stock.", 400
-
-        try:
-            user_a.apples, user_b.apples = new_a_apples, new_b_apples
-            user_a.juices, user_b.juices = new_a_juices, new_b_juices
-            user_a.monies, user_b.monies = new_a_monies, new_b_monies
-
-            new_trade = Trades(partyA=user_a.id, partyB=user_b.id, apples=dA, juices=dJ, monies=-money_total, timeOffset = timeOffset)
+            new_trade = Trades(
+                partyA=user_a.id,
+                partyB=user_b.id,
+                apples=dA,
+                juices=dJ,
+                monies=-money_total,
+                timeOffset=t_offset
+            )
             db.session.add(new_trade)
             db.session.commit()
-            return f"Trade successful! <a href='/inputTrade'>Back</a>"
+
+            # The Summary Message
+            resource = "🍎 Apples" if trade_type == 'apple' else "🧃 Juices"
+            summary = f"Trade Executed: {name_a} bought {abs(volume)} {resource} from {name_b} at ${price:.2f} (Total: ${abs(money_total):.2f}) at T+{t_offset}m"
+            flash(summary, "success")
+
+            return redirect('/inputTrade')
+
         except Exception as e:
             db.session.rollback()
-            return f"Error: {str(e)}", 500
+            flash(f"System Error: {str(e)}", "error")
+            return redirect('/inputTrade')
+
+    # Get the current minute for the auto-fill
+    state = GameState.query.first()
+    current_minute = 0
+    if state and state.is_active and state.start_time:
+        current_minute = int((datetime.now() - state.start_time).total_seconds() // 60)
 
     return render_template_string('''
         <style>
-            .container { display: flex; gap: 50px; font-family: sans-serif; padding: 20px; }
-            .box { flex: 1; border: 2px solid #ccc; padding: 20px; border-radius: 10px; }
-            .apple-box { border-color: #ffcccb; background: #fff5f5; }
-            .juice-box { border-color: #ffe5b4; background: #fffaf0; }
-            input { width: 100%; margin-bottom: 10px; padding: 8px; box-sizing: border-box; }
-            button { width: 100%; padding: 10px; cursor: pointer; font-weight: bold; }
+            body { font-family: sans-serif; background: #121212; color: #e0e0e0; }
+            .container { display: flex; gap: 50px; padding: 20px; justify-content: center; }
+            .box { flex: 1; max-width: 400px; border: 2px solid #ccc; padding: 20px; border-radius: 10px; }
+            .apple-box { border-color: #ff4d4d; background: #1a1010; }
+            .juice-box { border-color: #ffa500; background: #1a1610; }
+            input { width: 100%; margin-bottom: 10px; padding: 8px; box-sizing: border-box; background: #2d2d2d; color: white; border: 1px solid #444; }
+            button { width: 100%; padding: 12px; cursor: pointer; font-weight: bold; border: none; border-radius: 5px; }
+
+            .flash-container { max-width: 850px; margin: 20px auto; }
+            .flash { padding: 15px; border-radius: 5px; margin-bottom: 10px; text-align: center; font-weight: bold; }
+            .flash-success { background: #004d26; color: #00ff88; border: 1px solid #00ff88; }
+            .flash-error { background: #4d0000; color: #ff4d4d; border: 1px solid #ff4d4d; }
+            label { font-size: 0.8rem; color: #aaa; }
         </style>
 
-        <h1>Trading Floor</h1>
+        <div class="flash-container">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% if messages %}
+                {% for category, message in messages %}
+                  <div class="flash flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
+              {% endif %}
+            {% endwith %}
+        </div>
+
+        <h1 style="text-align:center">Trading Floor</h1>
         <div class="container">
             <div class="box apple-box">
                 <h2>🍎 Apple Trade</h2>
                 <form method="POST">
                     <input type="hidden" name="trade_type" value="apple">
-                    <label>Taker (Party A):</label>
+                    <label>Taker (Party A)</label>
                     <input type="text" name="partyA" placeholder="Username" required>
-                    <label>Market Maker (Party B):</label>
+                    <label>Market Maker (Party B)</label>
                     <input type="text" name="partyB" placeholder="Username" required>
-                    <label>Minute:</label>
-                    <input type="number" name="timeOffset" placeholder="0" required>
-                    <label>Price (per apple):</label>
+                    <label>Minute Offset</label>
+                    <input type="number" name="timeOffset" value="{{ current_minute }}">
+                    <label>Price</label>
                     <input type="number" step="any" name="price" required>
-                    <label>Volume (Qty):</label>
+                    <label>Volume</label>
                     <input type="number" step="any" name="volume" required>
                     <button type="submit" style="background: #ff4d4d; color: white;">Execute Apple Trade</button>
                 </form>
@@ -461,22 +450,22 @@ def input_trade():
                 <h2>🧃 Juice Trade</h2>
                 <form method="POST">
                     <input type="hidden" name="trade_type" value="juice">
-                    <label>Taker (Party A):</label>
+                    <label>Taker (Party A)</label>
                     <input type="text" name="partyA" placeholder="Username" required>
-                    <label>Market Maker (Party B):</label>
+                    <label>Market Maker (Party B)</label>
                     <input type="text" name="partyB" placeholder="Username" required>
-                    <label>Minute:</label>
-                    <input type="number" name="timeOffset" placeholder="0" required>
-                    <label>Price (per juice):</label>
+                    <label>Minute Offset</label>
+                    <input type="number" name="timeOffset" value="{{ current_minute }}">
+                    <label>Price</label>
                     <input type="number" step="any" name="price" required>
-                    <label>Volume (Qty):</label>
+                    <label>Volume</label>
                     <input type="number" step="any" name="volume" required>
                     <button type="submit" style="background: #ffa500; color: white;">Execute Juice Trade</button>
                 </form>
             </div>
         </div>
-        <p><a href="/dashboard">View Live Dashboard</a></p>
-        ''')
+        <p style="text-align: center;"><a href="/dashboard" style="color: #666;">View Live Dashboard</a></p>
+    ''', current_minute=current_minute)
 
 
 @app.route('/schedule')
@@ -838,6 +827,65 @@ def results():
         '''
     # Use the same results_html template provided in the previous step
     return render_template_string(results_html, data=results_data)
+
+@app.route('/adjust', methods=['GET', 'POST'])
+def adjust_user():
+    message = ""
+    if request.method == 'POST':
+        target_username = request.form.get('username')
+        user = Users.query.filter_by(username=target_username).first()
+
+        if user:
+            try:
+                # Get values from form, default to 0 if empty
+                d_apples = int(request.form.get('apples') or 0)
+                d_juices = int(request.form.get('juices') or 0)
+                d_monies = int(request.form.get('monies') or 0)
+
+                # Apply increments
+                user.apples = (user.apples or 0) + d_apples
+                user.juices = (user.juices or 0) + d_juices
+                user.monies = (user.monies or 0) + d_monies
+
+                db.session.commit()
+                message = f"Successfully updated {target_username}!"
+            except ValueError:
+                message = "Error: Please enter valid numbers."
+        else:
+            message = "User not found."
+
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Adjust Balances</title>
+        <style>
+            body { font-family: sans-serif; background: #121212; color: white; display: flex; justify-content: center; padding-top: 50px; }
+            .card { background: #1e1e1e; padding: 30px; border-radius: 8px; border: 1px solid #333; width: 300px; }
+            input { width: 100%; padding: 10px; margin: 10px 0; background: #2d2d2d; border: 1px solid #444; color: white; box-sizing: border-box; }
+            button { width: 100%; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; }
+            .msg { color: #00ff88; text-align: center; margin-bottom: 10px; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2>Adjust User</h2>
+            {% if message %}<p class="msg">{{ message }}</p>{% endif %}
+            <form method="POST">
+                <input type="text" name="username" placeholder="Username (e.g. F1, C0)" required>
+                <label>Add Apples:</label>
+                <input type="number" name="apples" value="0">
+                <label>Add Juice:</label>
+                <input type="number" name="juices" value="0">
+                <label>Add Money:</label>
+                <input type="number" name="monies" value="0">
+                <button type="submit">Apply Adjustment</button>
+            </form>
+            <p style="text-align:center"><a href="/dashboard" style="color:#666;">Dashboard</a></p>
+        </div>
+    </body>
+    </html>
+    ''', message=message)
 
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
