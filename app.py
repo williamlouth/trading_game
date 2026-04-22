@@ -206,6 +206,7 @@ def addUser(name, apples, juices, monies):
         juices=int(juices or 0),
         monies=int(monies or 0)
     )
+    print(f"DEBUG: Successfully added {name, apples, juices, monies}.")
     db.session.add(new_entry)
 
 
@@ -221,13 +222,13 @@ def addUsers(noFarmers, noAppleMakers, noProducers, noJuiceMakers, noConsumers):
         for i in range(f_count):
             addUser(f"F{i}", 0, 0, 0)
         for i in range(a_count):
-            addUser(f"A{i}", 0, 0, 500)
+            addUser(f"A{i}", 0, 0, 20000)
         for i in range(p_count):
-            addUser(f"P{i}", 0, 0, 100)
+            addUser(f"P{i}", 0, 50, 10000)
         for i in range(j_count):
-            addUser(f"J{i}", 0, 0, 500)
+            addUser(f"J{i}", 0, 0, 20000)
         for i in range(c_count):
-            addUser(f"C{i}", 0, 0, 0)
+            addUser(f"C{i}", 0, 0, 100000)
 
         db.session.commit()  # The crucial save
         print(f"DEBUG: Successfully added {f_count + a_count + p_count + j_count + c_count} users.")
@@ -980,69 +981,56 @@ def adjust_user():
     </html>
     ''', message=message)
 
+
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
-    if request.method == 'POST':
-        # 1. Wipe everything
-        db.drop_all()
-        db.create_all()
-
-        # 2. Setup Game State with current or default values
-        default_state = GameState(
-            is_active=False,
-            production_rate=50,
-            producer_limit=100
-        )
-        db.session.add(default_state)
-
-        # 3. Create Users directly from form data
-        try:
-            counts = {
-                'F': int(request.form.get('n1') or 0),
-                'A': int(request.form.get('n2') or 0),
-                'P': int(request.form.get('n3') or 0),
-                'J': int(request.form.get('n4') or 0),
-                'C': int(request.form.get('n5') or 0)
-            }
-
-            for prefix, count in counts.items():
-                for i in range(count):
-                    name = f"{prefix}{i}"
-                    a, j, m = 0, 0, 0
-                    if prefix == 'A': m = 20000
-                    if prefix == 'P':
-                        m = 10000
-                        j = 50
-                    if prefix == 'J': m = 20000
-                    if prefix == 'C': m = 100000
-                    addUser(name, a, j, m)
-
-            db.session.commit()
-            print("Database reset and users created successfully.")
-            print("F", counts['F'])
-            print("A", counts['A'])
-            print("P", counts['P'])
-            print("J", counts['J'])
-            print("C", counts['C'])
-
-            generate_schedule()
-        except Exception as e:
-            db.session.rollback()
-            print(f"Error during reset: {e}")
-            return f"Database Error: {e}", 500
-
-        return redirect('/admin')
-
-    # GET logic
+    message = ""
     state = GameState.query.first()
     if not state:
-        state = GameState(is_active=False, production_rate=50, producer_limit=100)
+        state = GameState(is_active=False)
         db.session.add(state)
         db.session.commit()
 
-    status_text = "RUNNING" if state.is_active else "STOPPED"
-    status_color = "#00ff88" if state.is_active else "#ff4d4d"
-    button_text = "Stop Game" if state.is_active else "Start Game"
+    if request.method == 'POST':
+        action = request.form.get('action')
+
+        # --- New Toggle Logic ---
+        if action == 'toggle':
+            if not state.is_active:
+                state.is_active = True
+                # Set start time only if it's the first time starting
+                if not state.start_time:
+                    state.start_time = datetime.now()
+                state.last_tick = datetime.now()
+                message = "Game Clock Started!"
+                minuteUpdate(0)
+            else:
+                state.is_active = False
+                message = "Game Clock Paused."
+            db.session.commit()
+
+        elif action == 'reset':
+            db.session.query(Trades).delete()
+            db.session.query(MinuteUpdates).delete()
+            db.session.query(Users).delete()
+            state.is_active = False
+            state.start_time = None
+            state.last_tick = None
+
+            f = int(request.form.get('f_count') or 4)
+            a = int(request.form.get('a_count') or 4)
+            p = int(request.form.get('p_count') or 4)
+            j = int(request.form.get('j_count') or 4)
+            c = int(request.form.get('c_count') or 4)
+
+            addUsers(f, a, p, j, c)
+            generate_schedule()
+            db.session.commit()
+            message = "Game Fully Reset."
+
+    # Determine button label and color based on state
+    btn_label = "STOP GAME CLOCK" if state.is_active else "START GAME CLOCK"
+    btn_class = "btn-stop" if state.is_active else "btn-start"
 
     admin_html = f'''
     <!DOCTYPE html>
@@ -1050,56 +1038,70 @@ def admin():
     <head>
         <title>Admin Control Panel</title>
         <style>
-            body {{ font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; padding: 20px; }}
-            .card {{ background: #1e1e1e; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #333; max-width: 500px; margin: auto; }}
-            h2 {{ margin-top: 0; color: #fff; border-bottom: 1px solid #333; padding-bottom: 10px; }}
-            label {{ display: block; margin: 10px 0 5px; font-size: 0.85rem; color: #bbb; }}
-            input {{ width: 100%; padding: 8px; background: #2d2d2d; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; }}
-            button {{ padding: 10px 15px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; margin-top: 10px; }}
-            .btn-blue {{ background: #007bff; color: white; }}
-            .btn-green {{ background: #28a745; color: white; }}
-            .btn-red {{ background: #dc3545; color: white; width: 100%; padding: 15px; }}
-            .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+            body {{ font-family: sans-serif; background: #121212; color: white; padding: 40px; text-align: center; }}
+            .card {{ background: #1e1e1e; padding: 20px; border-radius: 8px; border: 1px solid #333; 
+                    display: inline-block; min-width: 350px; margin-bottom: 20px; vertical-align: top; }}
+            .btn {{ display: block; width: 100%; padding: 12px; margin: 10px 0; border: none; 
+                   border-radius: 4px; cursor: pointer; font-weight: bold; text-decoration: none; font-size: 0.9rem; }}
+            .btn-start {{ background: #00ff88; color: #000; }}
+            .btn-stop {{ background: #ffa500; color: #000; }}
+            .btn-reset {{ background: #ff4d4d; color: white; margin-top: 20px; }}
+
+            .input-group {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
+            .input-group label {{ font-size: 0.8rem; color: #aaa; }}
+            .input-group input {{ width: 50px; background: #333; border: 1px solid #444; color: white; padding: 5px; text-align: center; }}
+
+            .nav-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }}
+            .nav-link {{ background: #333; color: #eee; padding: 10px; text-decoration: none; border-radius: 4px; font-size: 0.8rem; border: 1px solid #444; }}
         </style>
     </head>
     <body>
-        <div class="card">
-            <h2>Game Engine</h2>
-            <p>Status: <span style="color: {status_color}">{status_text}</span></p>
-            <form action="/toggle_game" method="POST">
-                <button type="submit" class="btn-blue">{button_text}</button>
-            </form>
-        </div>
+        <h1>Admin Control Panel</h1>
+        {{% if msg %}}<p style="color: #00ff88;">{{{{ msg }}}}</p>{{% endif %}}
 
         <div class="card">
-            <h2>Economic Parameters</h2>
-            <form action="/update_config" method="POST">
-                <label>Production Rate (Apples → Juice)</label>
-                <input type="number" name="production_rate" value="{state.production_rate}">
-                <label>P-User Inventory Limit</label>
-                <input type="number" name="producer_limit" value="{state.producer_limit}">
-                <button type="submit" class="btn-green">Update Settings</button>
-            </form>
-        </div>
-
-        <div class="card" style="border-color: #dc3545;">
-            <h2 style="color: #dc3545;">Reset World</h2>
+            <h2>Game Status</h2>
             <form method="POST">
-                <div class="grid">
-                    <div><label>Farmers</label><input type="number" name="n1" value="5"></div>
-                    <div><label>AppleMakers</label><input type="number" name="n2" value="3"></div>
-                    <div><label>Producers</label><input type="number" name="n3" value="2"></div>
-                    <div><label>JuiceMakers</label><input type="number" name="n4" value="3"></div>
-                    <div><label>Consumers</label><input type="number" name="n5" value="10"></div>
-                </div>
-                <button type="submit" class="btn-red" onclick="return confirm('Are you sure')">WIPE & RECREATE USERS</button>
+                <button type="submit" name="action" value="toggle" class="btn {btn_class}">{btn_label}</button>
+            </form>
+            <p style="font-size: 0.8rem; color: #666;">
+                Status: <strong>{"ACTIVE" if state.is_active else "PAUSED"}</strong>
+            </p>
+        </div>
+
+        <div class="card">
+            <h2>Initialize Game</h2>
+            <form method="POST">
+                <div class="input-group"><label>Farmers (F)</label><input type="number" name="f_count" value="4"></div>
+                <div class="input-group"><label>AppleMakers (A)</label><input type="number" name="a_count" value="4"></div>
+                <div class="input-group"><label>Producers (P)</label><input type="number" name="p_count" value="4"></div>
+                <div class="input-group"><label>JuiceMakers (J)</label><input type="number" name="j_count" value="4"></div>
+                <div class="input-group"><label>Consumers (C)</label><input type="number" name="c_count" value="4"></div>
+                <button type="submit" name="action" value="reset" class="btn btn-reset" 
+                        onclick="return confirm('DANGER: This will delete ALL trades. Proceed?')">
+                    WIPE & RESET GAME
+                </button>
             </form>
         </div>
-        <p style="text-align:center"><a href="/dashboard" style="color:#666; text-decoration:none;">Dashboard</a></p>
+
+        <br>
+
+        <div class="card" style="min-width: 720px;">
+            <div class="nav-grid">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/dashboard" class="nav-link">Dashboard</a>
+                <a href="/inputTrade" class="nav-link">Trade Floor</a>
+                <a href="/users" class="nav-link">User List</a>
+                <a href="/consumer-targets" class="nav-link">Live Targets</a>
+                <a href="/adjust" class="nav-link">Adjust Balances</a>
+                <a href="/results" class="nav-link">Final Results</a>
+                <a href="/schedule" class="nav-link">Ledger</a>
+            </div>
+        </div>
     </body>
     </html>
     '''
-    return render_template_string(admin_html)
+    return render_template_string(admin_html, msg=message)
 
 
 @app.route('/toggle_game', methods=['POST'])
