@@ -386,7 +386,10 @@ def input_trade():
             summary = f"Trade Executed: {name_a} bought {abs(volume)} {resource} from {name_b} at ${price:.2f} (Total: ${abs(money_total):.2f}) at T+{t_offset}m"
             flash(summary, "success")
 
-            return redirect('/inputTrade')
+            if trade_type == 'apple':
+                return redirect('/inputTrade?focus=apple')
+            return redirect('/inputTrade?focus=juice')
+
 
         except Exception as e:
             db.session.rollback()
@@ -433,7 +436,7 @@ def input_trade():
                 <form method="POST">
                     <input type="hidden" name="trade_type" value="apple">
                     <label>Taker (Party A)</label>
-                    <input type="text" name="partyA" placeholder="Username" required>
+                    <input type="text" name="partyA" id="partyA_apple" placeholder="Username" required>
                     <label>Market Maker (Party B)</label>
                     <input type="text" name="partyB" placeholder="Username" required>
                     <label>Minute Offset</label>
@@ -451,7 +454,7 @@ def input_trade():
                 <form method="POST">
                     <input type="hidden" name="trade_type" value="juice">
                     <label>Taker (Party A)</label>
-                    <input type="text" name="partyA" placeholder="Username" required>
+                    <input type="text" name="partyA" id="partyA_juice" placeholder="Username" required>
                     <label>Market Maker (Party B)</label>
                     <input type="text" name="partyB" placeholder="Username" required>
                     <label>Minute Offset</label>
@@ -464,6 +467,19 @@ def input_trade():
                 </form>
             </div>
         </div>
+        
+        <script>
+            // Check the URL for the "focus" parameter
+            const urlParams = new URLSearchParams(window.location.search);
+            const focusTarget = urlParams.get('focus');
+
+            if (focusTarget === 'apple') {
+                document.getElementById('partyA_apple').focus();
+            } else if (focusTarget === 'juice') {
+                document.getElementById('partyA_juice').focus();
+            }
+        </script>
+        
         <p style="text-align: center;"><a href="/dashboard" style="color: #666;">View Live Dashboard</a></p>
     ''', current_minute=current_minute)
 
