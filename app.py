@@ -47,6 +47,12 @@ class GameState(db.Model):
     production_rate = db.Column(db.Integer, default=50 )
     producer_limit = db.Column(db.Integer, default=100 )
 
+class ProducerUpdates(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    party = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    timeOffset = db.Column(db.Integer, nullable=True)
+    apples = db.Column(db.Integer, nullable=True, default=0)
+
 with app.app_context():
     db.create_all()
     print("Database and tables created")
@@ -75,6 +81,8 @@ def minuteUpdate(current_offset):
     for u in users:
         if u.username.startswith("P"):
             produced = min(u.apples, rate)
+            produceUpdate = ProducerUpdates(party = u.id, timeOffset = current_offset, apples = produced)
+            db.session.add(produceUpdate)
             u.apples -= produced
             u.juices += produced
 
@@ -113,7 +121,7 @@ def tick_game():
 @app.before_request
 def pulse():
     # Only pulse on specific routes to save database overhead
-    if request.endpoint in ['dashboard']:
+    if request.endpoint in ['dashboard','consumer-targets']:
         tick_game()
         
 @app.route('/')
@@ -497,6 +505,43 @@ def input_trade():
             )
             db.session.add(new_trade)
             db.session.commit()
+
+            now = datetime.now()
+            total_seconds_since_start = (now - state.start_time).total_seconds()
+            current_game_minute = int(total_seconds_since_start // 60)
+
+            if current_game_minute > t_offset and user_a.username.startswith("P"):
+                # 1. Try to find an existing record for this party at this specific time
+                existing_update = ProducerUpdates.query.filter_by(
+                    party=user_a.id,
+                    timeOffset=t_offset + 1
+                ).first()
+
+                used = existing_update.apples if existing_update else 0
+
+                # 2. Calculate conversion
+                production_limit = state.production_rate if state else 50
+                total = min(used + dA, production_limit)
+                convert = total - used
+
+                # 3. Apply changes to user
+                user_a.apples -= convert
+                user_a.juices += convert
+
+                if existing_update:
+                    # UPDATE: Modify the existing row
+                    existing_update.apples = used + convert
+                else:
+                    # INSERT: Create a brand new row
+                    new_row = ProducerUpdates(
+                        party=user_a.id,
+                        timeOffset=t_offset + 1,
+                        apples=used + convert
+                    )
+                    db.session.add(new_row)
+
+                # 4. Commit all changes (including user balance updates)
+                db.session.commit()
 
             # The Summary Message
             resource = "🍎 Apples" if trade_type == 'apple' else "🧃 Juices"
