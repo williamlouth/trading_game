@@ -401,6 +401,40 @@ def show_users():
 from flask import flash, get_flashed_messages  # Ensure these are imported at the top
 
 
+def validate_role(user, delta_apples, delta_juices, delta_monies, capacity):
+    """
+    Checks if the proposed changes would result in negative balances.
+    Returns error message if invalid, else None.
+    """
+    if user.username.startswith("F") and (delta_apples > 0 or delta_juices != 0):
+        return f"User {user.username} can only sell apples."
+
+    if user.username.startswith("A") and delta_juices != 0:
+        return f"User {user.username} can only trade apples."
+
+    if user.username.startswith("J") and delta_apples != 0:
+        return f"User {user.username} can only trade juice."
+
+    if user.username.startswith("P") and (delta_apples < 0 or delta_juices > 0):
+        return f"User {user.username} can only buy apple and sell juice."
+
+    if user.username.startswith("P") and (user.apples + delta_apples + user.juices + delta_juices > capacity):
+        return f"User {user.username} out of capacity sell some juice"
+
+    if user.username.startswith("C") and (delta_apples < 0 or delta_juices < 0):
+        return f"User {user.username} can only buy apple and buy juice."
+
+    if (user.apples + delta_apples) < 0:
+        return f"User {user.username} has insufficient apples."
+
+    if (user.juices + delta_juices) < 0:
+        return f"User {user.username} has insufficient juices."
+
+    if (user.monies + delta_monies) < 0:
+        return f"User {user.username} has insufficient funds."
+
+    return None
+
 @app.route('/inputTrade', methods=['GET', 'POST'])
 def input_trade():
     if request.method == 'POST':
@@ -434,8 +468,16 @@ def input_trade():
             state = GameState.query.first()
             current_limit = state.producer_limit if state else 100
 
-            # (Insert your validate_role check here...)
-            # error_a = validate_role(user_a, dA, dJ) ... etc
+            error_a = validate_role(user_a, dA, dJ, -money_total, current_limit)
+            if error_a:
+                flash(error_a, "error")
+                return redirect('/inputTrade')
+
+            # Party B: Loses apples/juice, Gains money
+            error_b = validate_role(user_b, -dA, -dJ, money_total, current_limit)
+            if error_b:
+                flash(error_b, "error")
+                return redirect('/inputTrade')
 
             # If everything passes:
             user_a.apples += dA
@@ -458,7 +500,10 @@ def input_trade():
 
             # The Summary Message
             resource = "🍎 Apples" if trade_type == 'apple' else "🧃 Juices"
-            summary = f"Trade Executed: {name_a} bought {abs(volume)} {resource} from {name_b} at ${price:.2f} (Total: ${abs(money_total):.2f}) at T+{t_offset}m"
+            if volume > 0:
+                 summary = f"Trade Executed: {name_a} bought {abs(volume)} {resource} from {name_b} at ${price:.2f} (Total: ${abs(money_total):.2f}) at T+{t_offset}m"
+            else:
+                summary = f"Trade Executed: {name_a} sold {abs(volume)} {resource} to {name_b} at ${price:.2f} (Total: ${abs(money_total):.2f}) at T+{t_offset}m"
             flash(summary, "success")
 
             if trade_type == 'apple':
