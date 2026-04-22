@@ -551,6 +551,11 @@ def generateFarmer(id, l):
         update = MinuteUpdates(party = id, timeOffset = index, apples = item)
         db.session.add(update)
 
+def generateConsumer(id, l):
+    for index, item in enumerate(l):
+        update = MinuteUpdates(party = id, timeOffset = index, apples = item[0], juices = item[1])
+        db.session.add(update)
+
 def generate_schedule():
     users = Users.query.all()
     farmerCount = 0
@@ -560,13 +565,119 @@ def generate_schedule():
         [50,60,70,20,10,90,100,50,30,50,10,90,100,60,50],
         [50,60,70,20,10,90,90,50,30,60,10,100,100,50,50]
     ]
+
+    consumerCount = 0
+    consumerLists = [
+        [[0,40],[0,50], [40,0],[20,0], [0,80],[0,60], [10,10], [60,0],[40,100], [0,100],[0,10],[10,10], [0,40],[60,0],[20,40]],
+        [[0,50],[0,40], [20,0],[40,0], [0,60],[0,80], [10,10], [40,0],[60,100], [0,90],[0,20],[10,10],  [0,60],[40,0],[40,20]],
+
+        [[0,50],[0,40], [0,60],[0,80], [20,0],[40,0], [10,10], [60,100],[40,0], [0,100],[0,10],[10,10], [20,30],[0,40],[60,10]],
+        [[0,40],[0,50], [0,80],[0,60], [40,0],[20,0], [10,10], [40,100],[60,0], [0,90],[0,20],[10,10], [50,0],[10,50], [20,30]],
+    ]
     for user in users:
         if user.username.startswith("F"):
             generateFarmer(user.id, farmerLists[farmerCount])
             if farmerCount + 1 < len(farmerLists):
                 farmerCount += 1
+        if user.username.startswith("C"):
+            generateConsumer(user.id, consumerLists[consumerCount])
+            if consumerCount + 1 < len(consumerLists):
+                consumerCount += 1
 
     db.session.commit()
+
+
+@app.route('/consumer-targets')
+def consumer_targets():
+    state = GameState.query.first()
+
+    # 1. Calculate the current game minute
+    current_minute = 0
+    if state and state.is_active and state.start_time:
+        total_seconds = (datetime.now() - state.start_time).total_seconds()
+        current_minute = int(total_seconds // 60)
+
+    # 2. Filter for Consumers (C) and the Current Minute
+    targets = db.session.query(MinuteUpdates, Users).join(
+        Users, MinuteUpdates.party == Users.id
+    ).filter(
+        Users.username.startswith('C'),
+        MinuteUpdates.timeOffset == current_minute
+    ).all()
+
+    targets_html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Live Consumer Targets</title>
+        <meta http-equiv="refresh" content="5">
+        <style>
+            body { font-family: 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 40px; text-align: center; }
+            .container { max-width: 600px; margin: auto; }
+            .clock-box { background: #1e1e1e; padding: 15px; border-radius: 8px; border: 1px solid #007bff; margin-bottom: 20px; }
+            .minute-display { font-size: 2rem; color: #007bff; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; background: #151515; border-radius: 8px; overflow: hidden; margin-top: 20px; }
+            th, td { padding: 15px; text-align: left; border-bottom: 1px solid #222; }
+            th { background: #202020; color: #888; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 1px; }
+            .user { color: #fff; font-weight: bold; }
+            .val { font-family: 'Courier New', monospace; font-weight: bold; font-size: 1.1rem; }
+            .apple { color: #ff4d4d; }
+            .juice { color: #ffa500; }
+            .empty-state { padding: 40px; color: #666; font-style: italic; }
+            .status-tag { font-size: 0.8rem; padding: 4px 8px; border-radius: 4px; background: #222; margin-top: 10px; display: inline-block; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Current Minute Targets</h1>
+
+            <div class="clock-box">
+                <div style="font-size: 0.8rem; color: #888;">GAME CLOCK</div>
+                <div class="minute-display">T + {{ current_minute }}m</div>
+                <div class="status-tag" style="color: {{ '#00ff88' if is_active else '#ff4d4d' }}">
+                    ● {{ "GAME ACTIVE" if is_active else "GAME PAUSED" }}
+                </div>
+            </div>
+
+            {% if targets %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Consumer</th>
+                        <th>🍎 Apples</th>
+                        <th>🧃 Juices</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for update, user in targets %}
+                    <tr>
+                        <td class="user">{{ user.username }}</td>
+                        <td class="val apple">{{ update.apples if update.apples else 0 }}</td>
+                        <td class="val juice">{{ update.juices if update.juices else 0 }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                No consumer targets scheduled for this minute.
+            </div>
+            {% endif %}
+
+            <div style="margin-top: 30px;">
+                <a href="/dashboard" style="color: #444; text-decoration: none;">← Return to Dashboard</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    '''
+    return render_template_string(
+        targets_html,
+        targets=targets,
+        current_minute=current_minute,
+        is_active=(state.is_active if state else False)
+    )
+
 
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
@@ -597,9 +708,12 @@ def admin():
                 for i in range(count):
                     name = f"{prefix}{i}"
                     a, j, m = 0, 0, 0
-                    if prefix == 'A': m = 500
-                    if prefix == 'P': m = 100
-                    if prefix == 'J': m = 500
+                    if prefix == 'A': m = 20000
+                    if prefix == 'P':
+                        m = 10000
+                        j = 50
+                    if prefix == 'J': m = 20000
+                    if prefix == 'C': m = 100000
                     addUser(name, a, j, m)
 
             db.session.commit()
