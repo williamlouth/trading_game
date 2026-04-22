@@ -471,6 +471,14 @@ def input_trade():
                 flash("Error: One or both users not found.", "error")
                 return redirect('/inputTrade')
 
+            if user_a.username[0] in ('A', 'J'):
+                flash(f"Error: {user_a.username} is a market maker and must always be Party B.", "error")
+                return redirect('/inputTrade')
+
+            if user_b.username[0] not in ('A', 'J'):
+                flash(f"Error: {user_b.username} is not a market maker — Party B must be an Apple Maker (A) or Juice Maker (J).", "error")
+                return redirect('/inputTrade')
+
             # --- Validation Logic (Assuming you kept the logic from previous steps) ---
             state = GameState.query.first()
             current_limit = state.producer_limit if state else 100
