@@ -53,6 +53,12 @@ class ProducerUpdates(db.Model):
     timeOffset = db.Column(db.Integer, nullable=True)
     apples = db.Column(db.Integer, nullable=True, default=0)
 
+class FarmerDiscards(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    party = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    timeOffset = db.Column(db.Integer, nullable=True)
+    apples = db.Column(db.Integer, nullable=True, default=0)
+
 with app.app_context():
     db.create_all()
     print("Database and tables created")
@@ -70,7 +76,22 @@ def minuteUpdate(current_offset):
         if user:
             # Apply the changes (defaulting to 0 if the column is None)
             if user.username.startswith("F"):
-                user.apples = min(100, user.apples)
+                current_apples = user.apples or 0
+                if current_offset > 0:
+                    discarded = max(0, current_apples - 100)
+                    if discarded > 0:
+                        existing_discard = FarmerDiscards.query.filter_by(
+                            party=user.id, timeOffset=current_offset - 1
+                        ).first()
+                        if existing_discard:
+                            existing_discard.apples += discarded
+                        else:
+                            db.session.add(FarmerDiscards(
+                                party=user.id,
+                                timeOffset=current_offset - 1,
+                                apples=discarded
+                            ))
+                user.apples = min(100, current_apples)
                 user.apples = (user.apples or 0) + (update.apples or 0)
                 user.juices = (user.juices or 0) + (update.juices or 0)
                 user.monies = (user.monies or 0) + (update.monies or 0)
@@ -483,7 +504,32 @@ def input_trade():
             state = GameState.query.first()
             current_limit = state.producer_limit if state else 100
 
+            now = datetime.now()
+            current_game_minute = 0
+            if state and state.is_active and state.start_time:
+                current_game_minute = int((now - state.start_time).total_seconds() // 60)
+
+            # For late farmer apple sales, include discarded apples in validation
+            is_late_farmer_apple_sale = (
+                user_a.username.startswith("F") and
+                trade_type == 'apple' and
+                dA < 0 and
+                current_game_minute > t_offset
+            )
+            farmer_discard_record = None
+            discard_apples = 0
+            if is_late_farmer_apple_sale:
+                farmer_discard_record = FarmerDiscards.query.filter_by(
+                    party=user_a.id, timeOffset=t_offset
+                ).first()
+                discard_apples = farmer_discard_record.apples if farmer_discard_record else 0
+                user_a.apples = (user_a.apples or 0) + discard_apples
+
             error_a = validate_role(user_a, dA, dJ, -money_total, current_limit)
+
+            if is_late_farmer_apple_sale:
+                user_a.apples = (user_a.apples or 0) - discard_apples  # restore
+
             if error_a:
                 flash(error_a, "error")
                 return redirect('/inputTrade')
@@ -495,7 +541,12 @@ def input_trade():
                 return redirect('/inputTrade')
 
             # If everything passes:
-            user_a.apples += dA
+            if is_late_farmer_apple_sale and discard_apples > 0:
+                absorbed = min(discard_apples, -dA)
+                farmer_discard_record.apples -= absorbed
+                user_a.apples = (user_a.apples or 0) + dA + absorbed
+            else:
+                user_a.apples += dA
             user_b.apples -= dA
             user_a.juices += dJ
             user_b.juices -= dJ
@@ -512,10 +563,6 @@ def input_trade():
             )
             db.session.add(new_trade)
             db.session.commit()
-
-            now = datetime.now()
-            total_seconds_since_start = (now - state.start_time).total_seconds()
-            current_game_minute = int(total_seconds_since_start // 60)
 
             if current_game_minute > t_offset and user_a.username.startswith("P"):
                 # 1. Try to find an existing record for this party at this specific time
@@ -1193,6 +1240,7 @@ def admin():
         elif action == 'reset':
             db.session.query(Trades).delete()
             db.session.query(MinuteUpdates).delete()
+            db.session.query(FarmerDiscards).delete()
             db.session.query(Users).delete()
             state.is_active = False
             state.start_time = None
