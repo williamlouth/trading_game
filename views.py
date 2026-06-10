@@ -1,11 +1,12 @@
 from datetime import datetime
 
 from flask import (Blueprint, request, render_template_string, redirect,
-                   flash, get_flashed_messages)
+                   flash, get_flashed_messages, jsonify)
 
 from models import (db, Users, Trades, MinuteUpdates, GameState, FarmerDiscards,
                     minuteUpdate, tick_game, addUsers, generate_schedule,
-                    validate_role, compute_results, compute_trade_highlights)
+                    validate_role, compute_results, compute_trade_highlights,
+                    game_clock, dashboard_trades, dashboard_users)
 
 bp = Blueprint('main', __name__)
 
@@ -13,7 +14,8 @@ bp = Blueprint('main', __name__)
 @bp.before_request
 def pulse():
     # Only pulse on specific routes to save database overhead
-    if request.endpoint in ['main.dashboard','main.consumer_targets']:
+    if request.endpoint in ['main.dashboard', 'main.consumer_targets',
+                            'main.api_dashboard']:
         tick_game()
 
 
@@ -96,85 +98,191 @@ def hello_world():
     return render_template_string(index_html)
 
 
+@bp.route('/api/dashboard')
+def api_dashboard():
+    is_active, elapsed_seconds, current_minute = game_clock()
+    block_start = (current_minute // 3) * 3
+    return jsonify({
+        'is_active': is_active,
+        'elapsed_seconds': elapsed_seconds,
+        'current_minute': current_minute,
+        'block_start': block_start,
+        'block_end': block_start + 2,
+        'trades': dashboard_trades(),
+        'users': dashboard_users(current_minute),
+    })
+
+
 @bp.route('/dashboard')
 def dashboard():
-    all_trades = Trades.query.order_by(Trades.id.desc()).all()
-
-    # Filtering logic
-    apple_trades = [t for t in all_trades if t.apples != 0 and t.monies != 0]
-
     dashboard_html = '''
     <!DOCTYPE html>
     <html>
     <head>
-        <meta http-equiv="refresh" content="5">
+        <title>Market Dashboard</title>
         <style>
-            body { font-family: 'Courier New', Courier, monospace; background: #121212; color: #e0e0e0; }
-            .container { display: flex; gap: 200px; padding: 20px; justify-content: center; }
-            .column { flex: 1; max-width: 500px; }
+            body { font-family: 'Courier New', Courier, monospace; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
+            h1 { text-align: center; color: #ffffff; margin-bottom: 6px; }
+            h2 { text-align: center; color: #ffffff; margin-bottom: 10px; }
+
+            .clock-box { max-width: 420px; margin: 0 auto 24px; background: #1e1e1e; border: 1px solid #007bff; border-radius: 8px; padding: 14px; text-align: center; }
+            .clock { font-size: 2.4rem; font-weight: bold; color: #007bff; letter-spacing: 2px; }
+            .clock-sub { font-size: 0.8rem; color: #888; margin-top: 4px; }
+            .status-tag { font-size: 0.8rem; padding: 4px 10px; border-radius: 4px; background: #222; margin-top: 8px; display: inline-block; }
+
+            .container { display: flex; gap: 40px; padding: 0 20px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+            .column { flex: 1; min-width: 320px; max-width: 520px; }
             table { width: 100%; border-collapse: collapse; background: #1e1e1e; table-layout: fixed; }
-            th, td { padding: 12px 8px; text-align: right; border-bottom: 1px solid #333; }
-
-            /* Header Styling */
+            th, td { padding: 10px 8px; text-align: right; border-bottom: 1px solid #333; }
             th { color: #888; font-size: 0.75rem; text-transform: uppercase; }
-            .col-arrow { width: 50px; text-align: center; }
-            .col-price { width: 100px; }
-            .col-size { width: 100px; }
 
-            /* Color and Arrow Logic */
+            .col-arrow { width: 50px; text-align: center; }
             .buy { color: #00ff88; }
             .sell { color: #ff4d4d; }
+            .arrow { font-size: 1.6rem; font-weight: bold; display: block; text-align: center; }
+            .price-cell, .size-cell { font-weight: bold; font-size: 1.1rem; }
 
-            .big-arrow { 
-                font-size: 4rem; 
-                font-weight: bold; 
-                display: block;
-                text-align: center;
-            }
-
-            h1, h2 { text-align: center; color: #ffffff; margin-bottom: 10px; }
-            .price-cell { font-weight: bold; font-size: 1.2rem; }
-            .size-cell { font-weight: bold; font-size: 1.2rem; }
+            td.user { text-align: left; color: #fff; font-weight: bold; }
+            .role { color: #666; font-size: 0.7rem; text-transform: uppercase; }
+            .money { color: #00ff88; }
+            .apples-pos { color: #e0e0e0; }
+            .apples-neg { color: #ffa500; }
+            .apples-zero { color: #00ff88; }
+            .empty { text-align: center; color: #666; font-style: italic; padding: 20px; }
         </style>
     </head>
     <body>
-        <h1>Market Tape</h1>
-        <div class="container">
+        <h1>Market Dashboard</h1>
 
+        <div class="clock-box">
+            <div class="clock-sub">GAME CLOCK</div>
+            <div class="clock" id="clock">00:00</div>
+            <div class="clock-sub" id="block-info">Minute 0 · Block T+0m–T+2m</div>
+            <div class="status-tag" id="status">● —</div>
+        </div>
+
+        <div class="container">
             <div class="column">
-                <h2>🍎 Apples</h2>
+                <h2>🍎 Market Tape</h2>
                 <table>
                     <thead>
                         <tr>
                             <th class="col-arrow">Dir</th>
-                            <th class="col-price">Price</th>
-                            <th class="col-size">Size</th>
+                            <th>Price</th>
+                            <th>Size</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {% for t in apple_trades %}
-                            {% set is_sell = t.apples < 0 %}
-                            {% set price = (t.monies / t.apples) | abs %}
-                            <tr class="{{ 'sell' if is_sell else 'buy' }}">
-                                <td class="col-arrow">
-                                    <span class="big-arrow">{{ '↓' if is_sell else '↑' }}</span>
-                                </td>
-                                <td class="price-cell">{{ "{:.2f}".format(price) }}</td>
-                                <td class="size-cell">{{ "-" if is_sell }}{{ t.apples | abs }}</td>
-                            </tr>
-                        {% endfor %}
+                    <tbody id="trades-body">
+                        <tr><td colspan="3" class="empty">Loading…</td></tr>
                     </tbody>
                 </table>
             </div>
 
+            <div class="column">
+                <h2>👤 Players</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="text-align:left">User</th>
+                            <th>🍎 Apples</th>
+                            <th>💰 Money</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-body">
+                        <tr><td colspan="3" class="empty">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
+
         <div style="text-align: center; margin-top: 30px;">
             <a href="/inputTrade" style="color: #666; text-decoration: none; border: 1px solid #444; padding: 10px 20px; border-radius: 5px;">[ Enter New Trade ]</a>
         </div>
+
+        <script>
+            let clockBase = 0;        // elapsed seconds reported by the server
+            let clockSyncAt = 0;      // performance.now() when that value arrived
+            let active = false;
+
+            function fmt(secs) {
+                const m = Math.floor(secs / 60);
+                const s = secs % 60;
+                return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+            }
+
+            function renderClock() {
+                let secs = clockBase;
+                if (active) {
+                    secs = clockBase + Math.floor((performance.now() - clockSyncAt) / 1000);
+                }
+                const minute = Math.floor(secs / 60);
+                const blockStart = Math.floor(minute / 3) * 3;
+                document.getElementById('clock').textContent = fmt(secs);
+                document.getElementById('block-info').textContent =
+                    'Minute ' + minute + ' · Block T+' + blockStart + 'm–T+' + (blockStart + 2) + 'm';
+                const status = document.getElementById('status');
+                status.textContent = active ? '● GAME ACTIVE' : '● GAME PAUSED';
+                status.style.color = active ? '#00ff88' : '#ff4d4d';
+            }
+
+            function renderTrades(trades) {
+                const body = document.getElementById('trades-body');
+                if (!trades.length) {
+                    body.innerHTML = '<tr><td colspan="3" class="empty">No trades yet.</td></tr>';
+                    return;
+                }
+                body.innerHTML = trades.map(t => {
+                    const cls = t.is_sell ? 'sell' : 'buy';
+                    const arrow = t.is_sell ? '↓' : '↑';
+                    const sign = t.is_sell ? '-' : '';
+                    return '<tr class="' + cls + '">' +
+                        '<td class="col-arrow"><span class="arrow">' + arrow + '</span></td>' +
+                        '<td class="price-cell">' + t.price.toFixed(2) + '</td>' +
+                        '<td class="size-cell">' + sign + t.size + '</td></tr>';
+                }).join('');
+            }
+
+            function renderUsers(users) {
+                const body = document.getElementById('users-body');
+                if (!users.length) {
+                    body.innerHTML = '<tr><td colspan="3" class="empty">No players.</td></tr>';
+                    return;
+                }
+                body.innerHTML = users.map(u => {
+                    let appleCls = 'apples-pos';
+                    if (u.apples < 0) appleCls = 'apples-neg';
+                    else if (u.role === 'consumer') appleCls = 'apples-zero';
+                    const money = '$' + u.monies.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                    return '<tr>' +
+                        '<td class="user">' + u.username + ' <span class="role">' + u.role + '</span></td>' +
+                        '<td class="' + appleCls + '">' + u.apples + '</td>' +
+                        '<td class="money">' + money + '</td></tr>';
+                }).join('');
+            }
+
+            async function refresh() {
+                try {
+                    const r = await fetch('/api/dashboard', {cache: 'no-store'});
+                    const d = await r.json();
+                    clockBase = d.elapsed_seconds;
+                    clockSyncAt = performance.now();
+                    active = d.is_active;
+                    renderClock();
+                    renderTrades(d.trades);
+                    renderUsers(d.users);
+                } catch (e) {
+                    /* keep last good state on transient errors */
+                }
+            }
+
+            setInterval(renderClock, 250);
+            setInterval(refresh, 1000);
+            refresh();
+        </script>
     </body>
     </html>
     '''
-    return render_template_string(dashboard_html, apple_trades=apple_trades)
+    return render_template_string(dashboard_html)
 
 
 @bp.route('/users')

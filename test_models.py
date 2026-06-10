@@ -6,7 +6,9 @@ from flask import Flask
 from models import (db, Users, Trades, MinuteUpdates, GameState, FarmerDiscards,
                     minuteUpdate, tick_game, addUser, addUsers, validate_role,
                     generateFarmer, generateConsumer, generate_schedule,
-                    consumer_fulfillment, compute_results, compute_trade_highlights)
+                    consumer_fulfillment, compute_results, compute_trade_highlights,
+                    consumer_block_remaining, game_clock, dashboard_trades,
+                    dashboard_users)
 
 
 @pytest.fixture
@@ -345,3 +347,103 @@ def test_compute_trade_highlights_picks_records(app):
 def test_compute_trade_highlights_empty(app):
     h = compute_trade_highlights()
     assert all(v is None for v in h.values())
+
+
+# --- consumer_block_remaining ---
+
+def test_consumer_block_remaining_starts_at_negative_target(app):
+    addUsers(0, 0, 1)
+    consumer = Users.query.filter_by(username="C0").first()
+    db.session.add(MinuteUpdates(party=consumer.id, timeOffset=0, apples=100))
+    db.session.commit()
+
+    # no trades yet -> full outstanding demand shown as negative
+    assert consumer_block_remaining(consumer, current_minute=1) == -100
+
+
+def test_consumer_block_remaining_moves_toward_zero(app):
+    addUsers(0, 1, 1)
+    consumer = Users.query.filter_by(username="C0").first()
+    maker = Users.query.filter_by(username="A0").first()
+    db.session.add(MinuteUpdates(party=consumer.id, timeOffset=0, apples=100))
+    db.session.commit()
+    make_trade(consumer.id, maker.id, apples=30, monies=-300, timeOffset=1)
+
+    assert consumer_block_remaining(consumer, current_minute=2) == -70
+
+
+def test_consumer_block_remaining_zero_when_met(app):
+    addUsers(0, 1, 1)
+    consumer = Users.query.filter_by(username="C0").first()
+    maker = Users.query.filter_by(username="A0").first()
+    db.session.add(MinuteUpdates(party=consumer.id, timeOffset=0, apples=50))
+    db.session.commit()
+    make_trade(consumer.id, maker.id, apples=80, monies=-800, timeOffset=0)
+
+    # buying past the target clamps to 0, not positive
+    assert consumer_block_remaining(consumer, current_minute=0) == 0
+
+
+def test_consumer_block_remaining_uses_current_block_only(app):
+    addUsers(0, 1, 1)
+    consumer = Users.query.filter_by(username="C0").first()
+    db.session.add(MinuteUpdates(party=consumer.id, timeOffset=0, apples=40))
+    db.session.commit()
+
+    # at minute 3 we are in the next block, which has no target row
+    assert consumer_block_remaining(consumer, current_minute=3) == 0
+
+
+# --- game_clock ---
+
+def test_game_clock_no_state(app):
+    assert game_clock() == (False, 0, 0)
+
+
+def test_game_clock_active_reports_elapsed(app):
+    db.session.add(GameState(
+        is_active=True,
+        start_time=datetime.now() - timedelta(seconds=125),
+    ))
+    db.session.commit()
+
+    is_active, elapsed, minute = game_clock()
+    assert is_active is True
+    assert elapsed >= 125
+    assert minute == elapsed // 60
+
+
+# --- dashboard_trades ---
+
+def test_dashboard_trades_newest_first_with_direction(app):
+    addUsers(1, 1, 1)
+    f0 = Users.query.filter_by(username="F0").first()
+    a0 = Users.query.filter_by(username="A0").first()
+    c0 = Users.query.filter_by(username="C0").first()
+    make_trade(f0.id, a0.id, apples=-30, monies=150, timeOffset=0)   # sell @ 5
+    make_trade(c0.id, a0.id, apples=20, monies=-160, timeOffset=0)   # buy  @ 8
+
+    trades = dashboard_trades()
+    assert len(trades) == 2
+    # newest first: the buy
+    assert trades[0] == {'is_sell': False, 'price': 8.0, 'size': 20}
+    assert trades[1] == {'is_sell': True, 'price': 5.0, 'size': 30}
+
+
+# --- dashboard_users ---
+
+def test_dashboard_users_consumer_shows_negative_target(app):
+    addUsers(1, 1, 1)
+    farmer = Users.query.filter_by(username="F0").first()
+    farmer.apples = 40
+    consumer = Users.query.filter_by(username="C0").first()
+    db.session.add(MinuteUpdates(party=consumer.id, timeOffset=0, apples=60))
+    db.session.commit()
+
+    rows = {u['username']: u for u in dashboard_users(current_minute=0)}
+    # farmer shows real inventory, consumer shows negative outstanding target
+    assert rows['F0']['apples'] == 40
+    assert rows['F0']['role'] == 'farmer'
+    assert rows['A0']['role'] == 'maker'
+    assert rows['C0']['apples'] == -60
+    assert rows['C0']['role'] == 'consumer'

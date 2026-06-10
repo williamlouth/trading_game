@@ -329,3 +329,86 @@ def compute_trade_highlights():
                 h['apple_worst_sell'] = t
 
     return h
+
+
+def consumer_block_bought(user, block_start):
+    """Net apples a consumer has bought within the given 3-minute block."""
+    trades = Trades.query.filter(
+        ((Trades.partyA == user.id) | (Trades.partyB == user.id)),
+        (Trades.timeOffset >= block_start),
+        (Trades.timeOffset <= block_start + 2)
+    ).all()
+    bought = 0
+    for tr in trades:
+        if tr.partyA == user.id:
+            bought += (tr.apples or 0)
+        else:
+            bought -= (tr.apples or 0)
+    return bought
+
+
+def consumer_block_remaining(user, current_minute):
+    """Outstanding apple demand for the current block, as a non-positive number.
+
+    Starts at -target and moves toward 0 as the consumer buys apples; 0 once met.
+    """
+    block_start = (current_minute // 3) * 3
+    target_row = MinuteUpdates.query.filter_by(
+        party=user.id, timeOffset=block_start
+    ).first()
+    target = max(0, (target_row.apples or 0) if target_row else 0)
+    if target == 0:
+        return 0
+    bought = consumer_block_bought(user, block_start)
+    remaining = max(0, target - bought)
+    return -remaining
+
+
+def game_clock():
+    """Return (is_active, elapsed_seconds, current_minute) for the running game."""
+    state = GameState.query.first()
+    is_active = bool(state and state.is_active)
+    elapsed_seconds = 0
+    if state and state.start_time:
+        elapsed_seconds = max(0, int((datetime.now() - state.start_time).total_seconds()))
+    current_minute = elapsed_seconds // 60
+    return is_active, elapsed_seconds, current_minute
+
+
+def dashboard_trades(limit=50):
+    """Recent apple trades, newest first, as display dicts."""
+    trades = Trades.query.order_by(Trades.id.desc()).limit(limit).all()
+    out = []
+    for t in trades:
+        if not t.apples or not t.monies:
+            continue
+        out.append({
+            'is_sell': t.apples < 0,
+            'price': round(abs(t.monies / t.apples), 2),
+            'size': abs(t.apples),
+        })
+    return out
+
+
+def dashboard_users(current_minute):
+    """All users with apple and money counts.
+
+    Consumers report their outstanding block target as a negative number
+    instead of an inventory count.
+    """
+    out = []
+    for u in Users.query.order_by(Users.username).all():
+        prefix = u.username[0]
+        if prefix == 'C':
+            apples = consumer_block_remaining(u, current_minute)
+            role = 'consumer'
+        else:
+            apples = u.apples or 0
+            role = 'farmer' if prefix == 'F' else 'maker'
+        out.append({
+            'username': u.username,
+            'apples': apples,
+            'monies': u.monies or 0,
+            'role': role,
+        })
+    return out
