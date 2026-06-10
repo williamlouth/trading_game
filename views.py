@@ -1024,9 +1024,9 @@ def admin():
             state.start_time = None
             state.last_tick = None
 
-            f = int(request.form.get('f_count') or 4)
-            a = int(request.form.get('a_count') or 4)
-            c = int(request.form.get('c_count') or 4)
+            f = int(request.form.get('f_count') or 2)
+            a = int(request.form.get('a_count') or 2)
+            c = int(request.form.get('c_count') or 3)
 
             addUsers(f, a, c)
             generate_schedule()
@@ -1077,9 +1077,9 @@ def admin():
         <div class="card">
             <h2>Initialize Game</h2>
             <form method="POST">
-                <div class="input-group"><label>Farmers (F)</label><input type="number" name="f_count" value="4"></div>
-                <div class="input-group"><label>AppleMakers (A)</label><input type="number" name="a_count" value="4"></div>
-                <div class="input-group"><label>Consumers (C)</label><input type="number" name="c_count" value="4"></div>
+                <div class="input-group"><label>Farmers (F)</label><input type="number" name="f_count" value="2"></div>
+                <div class="input-group"><label>AppleMakers (A)</label><input type="number" name="a_count" value="2"></div>
+                <div class="input-group"><label>Consumers (C)</label><input type="number" name="c_count" value="3"></div>
                 <button type="submit" name="action" value="reset" class="btn btn-reset" 
                         onclick="return confirm('DANGER: This will delete ALL trades. Proceed?')">
                     WIPE & RESET GAME

@@ -514,3 +514,27 @@ def test_execute_trade_rejects_bad_price_and_volume(app):
     ok, msg = execute_trade("C0", "A0", t_offset=0, price=5, volume=0)
     assert ok is False
     assert "Volume cannot be zero" in msg
+
+
+def test_consumer_total_targets_sum_to_680(app):
+    # Each consumer's targets across the whole game should sum to the same total
+    addUsers(0, 0, 4)
+    generate_schedule()
+    for c in Users.query.filter(Users.username.startswith('C')).all():
+        total = sum(
+            (r.apples or 0)
+            for r in MinuteUpdates.query.filter_by(party=c.id).all()
+        )
+        assert total == 680, f"{c.username} totals {total}, expected 680"
+
+
+def test_farmer_total_harvest_sums_to_945(app):
+    # Each farmer's scheduled harvest across the game should total 945
+    addUsers(4, 0, 0)
+    generate_schedule()
+    for f in Users.query.filter(Users.username.startswith('F')).all():
+        total = sum(
+            (r.apples or 0)
+            for r in MinuteUpdates.query.filter_by(party=f.id).all()
+        )
+        assert total == 945, f"{f.username} totals {total}, expected 945"
