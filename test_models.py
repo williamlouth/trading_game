@@ -3,9 +3,10 @@ from datetime import datetime, timedelta
 import pytest
 from flask import Flask
 
-from models import (db, Users, MinuteUpdates, GameState, FarmerDiscards,
+from models import (db, Users, Trades, MinuteUpdates, GameState, FarmerDiscards,
                     minuteUpdate, tick_game, addUser, addUsers, validate_role,
-                    generateFarmer, generateConsumer, generate_schedule)
+                    generateFarmer, generateConsumer, generate_schedule,
+                    consumer_fulfillment, compute_results, compute_trade_highlights)
 
 
 @pytest.fixture
@@ -27,6 +28,14 @@ def make_user(username, apples=0, monies=0):
     db.session.add(user)
     db.session.commit()
     return user
+
+
+def make_trade(partyA, partyB, apples, monies, timeOffset):
+    trade = Trades(partyA=partyA, partyB=partyB, apples=apples,
+                   monies=monies, timeOffset=timeOffset)
+    db.session.add(trade)
+    db.session.commit()
+    return trade
 
 
 # --- addUser / addUsers ---
@@ -222,3 +231,117 @@ def test_tick_game_active_processes_elapsed_minutes(app):
     # minutes 0, 1 and 2 each grant 10 apples
     assert Users.query.filter_by(username="F0").first().apples == 30
     assert GameState.query.first().last_tick is not None
+
+
+# --- consumer_fulfillment ---
+
+def test_consumer_fulfillment_counts_trades_across_block(app):
+    addUsers(0, 1, 1)
+    consumer = Users.query.filter_by(username="C0").first()
+    maker = Users.query.filter_by(username="A0").first()
+    # one block target of 100 apples starting at minute 0 (covers minutes 0-2)
+    db.session.add(MinuteUpdates(party=consumer.id, timeOffset=0, apples=100))
+    db.session.commit()
+
+    # consumer buys 40 at minute 1 and 30 at minute 2, both inside the block
+    make_trade(consumer.id, maker.id, apples=40, monies=-400, timeOffset=1)
+    make_trade(consumer.id, maker.id, apples=30, monies=-300, timeOffset=2)
+
+    earned, possible, pct = consumer_fulfillment(consumer)
+    assert earned == 70
+    assert possible == 100
+    assert pct == 70.0
+
+
+def test_consumer_fulfillment_excludes_trades_outside_block(app):
+    addUsers(0, 1, 1)
+    consumer = Users.query.filter_by(username="C0").first()
+    maker = Users.query.filter_by(username="A0").first()
+    db.session.add(MinuteUpdates(party=consumer.id, timeOffset=0, apples=100))
+    db.session.commit()
+
+    # a trade at minute 3 is in the next block and must not count
+    make_trade(consumer.id, maker.id, apples=50, monies=-500, timeOffset=3)
+
+    earned, possible, pct = consumer_fulfillment(consumer)
+    assert earned == 0
+    assert possible == 100
+    assert pct == 0.0
+
+
+def test_consumer_fulfillment_caps_at_target(app):
+    addUsers(0, 1, 1)
+    consumer = Users.query.filter_by(username="C0").first()
+    maker = Users.query.filter_by(username="A0").first()
+    db.session.add(MinuteUpdates(party=consumer.id, timeOffset=0, apples=50))
+    db.session.commit()
+
+    # buying more than the target cannot earn more than the target
+    make_trade(consumer.id, maker.id, apples=80, monies=-800, timeOffset=0)
+
+    earned, possible, pct = consumer_fulfillment(consumer)
+    assert earned == 50
+    assert possible == 50
+    assert pct == 100.0
+
+
+# --- compute_results ---
+
+def test_compute_results_groups_and_ranks(app):
+    addUsers(0, 2, 0)
+    a0 = Users.query.filter_by(username="A0").first()
+    a1 = Users.query.filter_by(username="A1").first()
+    a0.monies = 100
+    a1.monies = 500
+    db.session.commit()
+
+    results = compute_results()
+    assert set(results.keys()) == {"Farmers (F)", "AppleMakers (A)", "Consumers (C)"}
+    # makers ranked by money descending
+    assert [p["username"] for p in results["AppleMakers (A)"]] == ["A1", "A0"]
+
+
+def test_compute_results_ranks_consumers_by_fulfillment(app):
+    addUsers(0, 1, 2)
+    maker = Users.query.filter_by(username="A0").first()
+    c0 = Users.query.filter_by(username="C0").first()
+    c1 = Users.query.filter_by(username="C1").first()
+    # both target 100 in block 0; C1 fully fills it, C0 does not
+    db.session.add(MinuteUpdates(party=c0.id, timeOffset=0, apples=100))
+    db.session.add(MinuteUpdates(party=c1.id, timeOffset=0, apples=100))
+    db.session.commit()
+    make_trade(c0.id, maker.id, apples=40, monies=-400, timeOffset=0)
+    make_trade(c1.id, maker.id, apples=100, monies=-1000, timeOffset=0)
+
+    consumers = compute_results()["Consumers (C)"]
+    assert [p["username"] for p in consumers] == ["C1", "C0"]
+    assert consumers[0]["fulfillment"] == 100.0
+    assert consumers[1]["fulfillment"] == 40.0
+
+
+# --- compute_trade_highlights ---
+
+def test_compute_trade_highlights_picks_records(app):
+    addUsers(1, 1, 1)
+    f0 = Users.query.filter_by(username="F0").first()
+    a0 = Users.query.filter_by(username="A0").first()
+    c0 = Users.query.filter_by(username="C0").first()
+
+    # farmer sells 30 @ 4 and 50 @ 6 (sells -> negative apples)
+    cheap_sell = make_trade(f0.id, a0.id, apples=-30, monies=120, timeOffset=0)
+    rich_sell = make_trade(f0.id, a0.id, apples=-50, monies=300, timeOffset=1)
+    # consumer buys 20 @ 8 and 10 @ 5 (buys -> positive apples)
+    pricey_buy = make_trade(c0.id, a0.id, apples=20, monies=-160, timeOffset=0)
+    cheap_buy = make_trade(c0.id, a0.id, apples=10, monies=-50, timeOffset=1)
+
+    h = compute_trade_highlights()
+    assert h["apple_big"].id == rich_sell.id          # largest volume (50)
+    assert h["apple_best_sell"].id == rich_sell.id    # highest sell price (6)
+    assert h["apple_worst_sell"].id == cheap_sell.id  # lowest sell price (4)
+    assert h["apple_best_buy"].id == cheap_buy.id     # lowest buy price (5)
+    assert h["apple_worst_buy"].id == pricey_buy.id   # highest buy price (8)
+
+
+def test_compute_trade_highlights_empty(app):
+    h = compute_trade_highlights()
+    assert all(v is None for v in h.values())

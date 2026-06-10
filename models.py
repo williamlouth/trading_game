@@ -194,3 +194,138 @@ def generate_schedule():
                 consumerCount += 1
 
     db.session.commit()
+
+
+RESULT_CATEGORIES = {
+    'F': 'Farmers (F)',
+    'A': 'AppleMakers (A)',
+    'C': 'Consumers (C)',
+}
+
+
+def consumer_fulfillment(user):
+    """How well a consumer met its 3-minute block targets.
+
+    Returns (earned_points, possible_points, fulfillment_percentage).
+    """
+    total_possible_points = 0
+    total_earned_points = 0
+
+    # Each MinuteUpdates row is the target for one 3-minute block
+    updates = MinuteUpdates.query.filter_by(party=user.id).all()
+
+    for up in updates:
+        m = up.timeOffset
+        target_apples = max(0, up.apples or 0)
+
+        if target_apples == 0:
+            continue
+
+        total_possible_points += target_apples
+
+        # Find all trades this user did within this 3-minute block
+        trades_this_block = Trades.query.filter(
+            ((Trades.partyA == user.id) | (Trades.partyB == user.id)),
+            (Trades.timeOffset >= m),
+            (Trades.timeOffset <= m + 2)
+        ).all()
+
+        # Calculate what they actually bought during this block
+        bought_apples = 0
+        for tr in trades_this_block:
+            if tr.partyA == user.id:
+                bought_apples += (tr.apples or 0)
+            else:
+                # PartyB is the Maker (Inverse delta)
+                bought_apples -= (tr.apples or 0)
+
+        # Cap the fulfillment: you can't earn more than the block target
+        earned_apples = min(max(0, bought_apples), target_apples)
+        total_earned_points += earned_apples
+
+    fulfillment = (total_earned_points / total_possible_points * 100) if total_possible_points > 0 else 0
+    return total_earned_points, total_possible_points, round(fulfillment, 2)
+
+
+def compute_results():
+    """Build per-category rankings plus consumer fulfillment scores."""
+    results_data = {
+        'Farmers (F)': [],
+        'AppleMakers (A)': [],
+        'Consumers (C)': []
+    }
+
+    for u in Users.query.all():
+        prefix = u.username[0]
+        category = RESULT_CATEGORIES.get(prefix)
+
+        if not category:
+            continue
+
+        if prefix != 'C':
+            # Standard ranking for non-consumers
+            results_data[category].append({
+                'username': u.username,
+                'monies': u.monies or 0,
+                'apples': u.apples or 0
+            })
+        else:
+            earned, possible, fulfillment = consumer_fulfillment(u)
+            results_data[category].append({
+                'username': u.username,
+                'monies': u.monies or 0,
+                'fulfillment': fulfillment,
+                'score': earned,
+                'max_score': possible
+            })
+
+    # Sort the lists
+    for key in results_data:
+        if key == 'Consumers (C)':
+            # Rank 1: Fulfillment % | Rank 2: Final Money
+            results_data[key].sort(key=lambda x: (x['fulfillment'], x['monies']), reverse=True)
+        else:
+            results_data[key].sort(key=lambda x: x['monies'], reverse=True)
+
+    return results_data
+
+
+def compute_trade_highlights():
+    """Compute the hall-of-fame records across all apple trades."""
+    h = {
+        'apple_best_buy': None, 'apple_worst_buy': None,
+        'apple_best_sell': None, 'apple_worst_sell': None,
+        'apple_big': None
+    }
+
+    for t in Trades.query.all():
+        raw_vol = t.apples
+        if not raw_vol:
+            continue
+
+        abs_vol = abs(raw_vol)
+        price = abs(t.monies / raw_vol)
+
+        # 1. Volume Record (Either direction)
+        if not h['apple_big'] or abs_vol > abs(h['apple_big'].apples):
+            h['apple_big'] = t
+
+        # 2. Buy Records (Taker A bought, so raw_vol > 0)
+        if raw_vol > 0:
+            # Best Buy = Lowest Price
+            if not h['apple_best_buy'] or price < abs(h['apple_best_buy'].monies / h['apple_best_buy'].apples):
+                h['apple_best_buy'] = t
+            # Worst Buy = Highest Price
+            if not h['apple_worst_buy'] or price > abs(h['apple_worst_buy'].monies / h['apple_worst_buy'].apples):
+                h['apple_worst_buy'] = t
+
+        # 3. Sell Records (Taker A sold, so raw_vol < 0)
+        else:
+            # Best Sell = Highest Price
+            if not h['apple_best_sell'] or price > abs(h['apple_best_sell'].monies / h['apple_best_sell'].apples):
+                h['apple_best_sell'] = t
+            # Worst Sell = Lowest Price
+            if not h['apple_worst_sell'] or price < abs(h['apple_worst_sell'].monies / h['apple_worst_sell'].apples):
+                h['apple_worst_sell'] = t
+
+    return h

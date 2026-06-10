@@ -5,7 +5,7 @@ from flask import (Blueprint, request, render_template_string, redirect,
 
 from models import (db, Users, Trades, MinuteUpdates, GameState, FarmerDiscards,
                     minuteUpdate, tick_game, addUsers, generate_schedule,
-                    validate_role)
+                    validate_role, compute_results, compute_trade_highlights)
 
 bp = Blueprint('main', __name__)
 
@@ -564,127 +564,9 @@ def consumer_targets():
 
 @bp.route('/results')
 def results():
-    users = Users.query.all()
-    user_map = {u.id: u.username for u in users}
-    all_updates = MinuteUpdates.query.all()
-    all_trades = Trades.query.all()
-
-    results_data = {
-        'Farmers (F)': [],
-        'AppleMakers (A)': [],
-        'Consumers (C)': []
-    }
-
-    for u in users:
-        prefix = u.username[0]
-        category = {
-            'F': 'Farmers (F)',
-            'A': 'AppleMakers (A)',
-            'C': 'Consumers (C)'
-        }.get(prefix)
-
-        if not category: continue
-
-        if prefix != 'C':
-            # Standard Ranking for non-consumers
-            results_data[category].append({
-                'username': u.username,
-                'monies': u.monies or 0,
-                'apples': u.apples or 0
-            })
-        else:
-            # --- Consumer Fulfillment Logic (Capped per minute) ---
-            total_possible_points = 0
-            total_earned_points = 0
-
-            # Get all minutes where this consumer had a target
-            updates = MinuteUpdates.query.filter_by(party=u.id).all()
-
-            for up in updates:
-                m = up.timeOffset
-                target_apples = max(0, up.apples or 0)
-                block_target_total = target_apples
-
-                if block_target_total == 0:
-                    continue
-
-                total_possible_points += block_target_total
-
-                # Find all trades this user did within this 3-minute block
-                trades_this_block = Trades.query.filter(
-                    ((Trades.partyA == u.id) | (Trades.partyB == u.id)),
-                    (Trades.timeOffset >= m),
-                    (Trades.timeOffset <= m + 2)
-                ).all()
-
-                # Calculate what they actually bought during this block
-                bought_apples = 0
-                for tr in trades_this_block:
-                    if tr.partyA == u.id:
-                        bought_apples += (tr.apples or 0)
-                    else:
-                        # PartyB is the Maker (Inverse delta)
-                        bought_apples -= (tr.apples or 0)
-
-                # Cap the fulfillment: You can't get more than the target per resource
-                # and we ensure negative progress isn't possible per your "buy only" rule
-                earned_apples = min(max(0, bought_apples), target_apples)
-
-                total_earned_points += earned_apples
-
-            fulfillment = (total_earned_points / total_possible_points * 100) if total_possible_points > 0 else 0
-
-            results_data[category].append({
-                'username': u.username,
-                'monies': u.monies or 0,
-                'fulfillment': round(fulfillment, 2),
-                'score': total_earned_points,
-                'max_score': total_possible_points
-            })
-
-    # Sort the lists
-    for key in results_data:
-        if key == 'Consumers (C)':
-            # Rank 1: Fulfillment % | Rank 2: Final Money
-            results_data[key].sort(key=lambda x: (x['fulfillment'], x['monies']), reverse=True)
-        else:
-            results_data[key].sort(key=lambda x: x['monies'], reverse=True)
-
-    # Helper to get usernames by ID for the highlights
-    h = {
-        'apple_best_buy': None, 'apple_worst_buy': None,
-        'apple_best_sell': None, 'apple_worst_sell': None,
-        'apple_big': None
-    }
-
-    for t in all_trades:
-        raw_vol = t.apples
-        if not raw_vol: continue
-
-        abs_vol = abs(raw_vol)
-        price = abs(t.monies / raw_vol)
-
-        # 1. Volume Record (Either direction)
-        if not h['apple_big'] or abs_vol > abs(h['apple_big'].apples):
-            h['apple_big'] = t
-
-        # 2. Buy Records (Taker A bought, so raw_vol > 0)
-        if raw_vol > 0:
-            # Best Buy = Lowest Price
-            if not h['apple_best_buy'] or price < abs(h['apple_best_buy'].monies / h['apple_best_buy'].apples):
-                h['apple_best_buy'] = t
-            # Worst Buy = Highest Price
-            if not h['apple_worst_buy'] or price > abs(h['apple_worst_buy'].monies / h['apple_worst_buy'].apples):
-                h['apple_worst_buy'] = t
-
-        # 3. Sell Records (Taker A sold, so raw_vol < 0)
-        else:
-            # Best Sell = Highest Price
-            if not h['apple_best_sell'] or price > abs(h['apple_best_sell'].monies / h['apple_best_sell'].apples):
-                h['apple_best_sell'] = t
-            # Worst Sell = Lowest Price
-            if not h['apple_worst_sell'] or price < abs(h['apple_worst_sell'].monies / h['apple_worst_sell'].apples):
-                h['apple_worst_sell'] = t
+    user_map = {u.id: u.username for u in Users.query.all()}
+    results_data = compute_results()
+    h = compute_trade_highlights()
 
     # Template Logic
     # Define the awards we want to display
