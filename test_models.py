@@ -151,19 +151,20 @@ def test_generate_farmer_creates_sequential_updates(app):
     assert [r.apples for r in rows] == [10, 20, 30]
 
 
-def test_generate_consumer_creates_sequential_updates(app):
+def test_generate_consumer_aggregates_into_blocks(app):
     addUsers(0, 0, 1)
     consumer = Users.query.filter_by(username="C0").first()
 
-    generateConsumer(consumer.id, [5, 15])
+    # 4 minutes of demand collapse into two 3-minute blocks (0-2, 3)
+    generateConsumer(consumer.id, [5, 15, 10, 20])
     db.session.commit()
 
     rows = (MinuteUpdates.query
             .filter_by(party=consumer.id)
             .order_by(MinuteUpdates.timeOffset)
             .all())
-    assert [r.timeOffset for r in rows] == [0, 1]
-    assert [r.apples for r in rows] == [5, 15]
+    assert [r.timeOffset for r in rows] == [0, 3]
+    assert [r.apples for r in rows] == [30, 20]
 
 
 def test_generate_schedule_targets_farmers_and_consumers(app):
@@ -174,8 +175,13 @@ def test_generate_schedule_targets_farmers_and_consumers(app):
     consumer = Users.query.filter_by(username="C0").first()
     maker = Users.query.filter_by(username="A0").first()
 
+    # farmers still produce every minute (15 entries)
     assert MinuteUpdates.query.filter_by(party=farmer.id).count() == 15
-    assert MinuteUpdates.query.filter_by(party=consumer.id).count() == 15
+    # 15 minutes of consumer demand collapse into five 3-minute blocks
+    assert MinuteUpdates.query.filter_by(party=consumer.id).count() == 5
+    assert [r.timeOffset for r in MinuteUpdates.query
+            .filter_by(party=consumer.id)
+            .order_by(MinuteUpdates.timeOffset).all()] == [0, 3, 6, 9, 12]
     # market makers have no schedule
     assert MinuteUpdates.query.filter_by(party=maker.id).count() == 0
 

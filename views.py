@@ -475,12 +475,15 @@ def consumer_targets():
         total_seconds = (datetime.now() - state.start_time).total_seconds()
         current_minute = int(total_seconds // 60)
 
-    # 2. Filter for Consumers (C) and the Current Minute
+    # 2. Filter for Consumers (C) and the current 3-minute block.
+    #    Targets are issued at the start of each block (minutes 0, 3, 6, ...).
+    block_start = (current_minute // 3) * 3
+    block_end = block_start + 2
     targets = db.session.query(MinuteUpdates, Users).join(
         Users, MinuteUpdates.party == Users.id
     ).filter(
         Users.username.startswith('C'),
-        MinuteUpdates.timeOffset == current_minute
+        MinuteUpdates.timeOffset == block_start
     ).all()
 
     targets_html = '''
@@ -506,11 +509,14 @@ def consumer_targets():
     </head>
     <body>
         <div class="container">
-            <h1>Current Minute Targets</h1>
+            <h1>Current Block Targets</h1>
 
             <div class="clock-box">
                 <div style="font-size: 0.8rem; color: #888;">GAME CLOCK</div>
                 <div class="minute-display">T + {{ current_minute }}m</div>
+                <div style="font-size: 0.8rem; color: #007bff; margin-top: 4px;">
+                    Block window: T + {{ block_start }}m – T + {{ block_end }}m
+                </div>
                 <div class="status-tag" style="color: {{ '#00ff88' if is_active else '#ff4d4d' }}">
                     ● {{ "GAME ACTIVE" if is_active else "GAME PAUSED" }}
                 </div>
@@ -535,7 +541,7 @@ def consumer_targets():
             </table>
             {% else %}
             <div class="empty-state">
-                No consumer targets scheduled for this minute.
+                No consumer targets scheduled for this block.
             </div>
             {% endif %}
 
@@ -550,6 +556,8 @@ def consumer_targets():
         targets_html,
         targets=targets,
         current_minute=current_minute,
+        block_start=block_start,
+        block_end=block_end,
         is_active=(state.is_active if state else False)
     )
 
@@ -595,22 +603,23 @@ def results():
             for up in updates:
                 m = up.timeOffset
                 target_apples = max(0, up.apples or 0)
-                minute_target_total = target_apples
+                block_target_total = target_apples
 
-                if minute_target_total == 0:
+                if block_target_total == 0:
                     continue
 
-                total_possible_points += minute_target_total
+                total_possible_points += block_target_total
 
-                # Find all trades this user did in THIS specific minute
-                trades_this_min = Trades.query.filter(
+                # Find all trades this user did within this 3-minute block
+                trades_this_block = Trades.query.filter(
                     ((Trades.partyA == u.id) | (Trades.partyB == u.id)),
-                    (Trades.timeOffset == m)
+                    (Trades.timeOffset >= m),
+                    (Trades.timeOffset <= m + 2)
                 ).all()
 
-                # Calculate what they actually bought this minute
+                # Calculate what they actually bought during this block
                 bought_apples = 0
-                for tr in trades_this_min:
+                for tr in trades_this_block:
                     if tr.partyA == u.id:
                         bought_apples += (tr.apples or 0)
                     else:

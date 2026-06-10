@@ -158,8 +158,12 @@ def generateFarmer(id, l):
         db.session.add(update)
 
 def generateConsumer(id, l):
-    for index, item in enumerate(l):
-        update = MinuteUpdates(party = id, timeOffset = index, apples = item)
+    # Targets are issued per 3-minute block (minutes 0-2, 3-5, ...).
+    # Each block target is the combined apple demand across its minutes.
+    block = 3
+    for start in range(0, len(l), block):
+        chunk = l[start:start + block]
+        update = MinuteUpdates(party = id, timeOffset = start, apples = sum(chunk))
         db.session.add(update)
 
 def generate_schedule():
