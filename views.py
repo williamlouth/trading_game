@@ -285,6 +285,169 @@ def dashboard():
     return render_template_string(dashboard_html)
 
 
+GUIDE_HTML = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ title }} — Role Guide</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 40px; }
+        .wrap { max-width: 760px; margin: auto; }
+        .header { text-align: center; border: 1px solid {{ accent }}; border-radius: 12px;
+                  padding: 30px; margin-bottom: 24px; background: #141414; }
+        .emoji { font-size: 3rem; }
+        h1 { margin: 8px 0; letter-spacing: 2px; }
+        .intro { color: #aaa; line-height: 1.6; margin: 0 auto; max-width: 560px; }
+        .card { background: #161616; border: 1px solid #222; border-radius: 12px;
+                padding: 20px 26px; margin-bottom: 18px; }
+        .card h2 { margin-top: 0; font-size: 1.05rem; text-transform: uppercase; letter-spacing: 1px;
+                   border-bottom: 1px solid #2a2a2a; padding-bottom: 10px; }
+        ul { margin: 0; padding-left: 22px; }
+        li { margin: 10px 0; line-height: 1.55; }
+        li b { color: #fff; }
+        .nav { text-align: center; margin-top: 30px; }
+        .nav a { color: #888; text-decoration: none; margin: 0 10px; border: 1px solid #444;
+                 padding: 8px 16px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="header">
+            <div class="emoji">{{ emoji }}</div>
+            <h1>{{ title }}</h1>
+            <p class="intro">{{ intro }}</p>
+        </div>
+        {% for heading, bullets in sections %}
+        <div class="card">
+            <h2 style="color: {{ accent }}">{{ heading }}</h2>
+            <ul>
+                {% for b in bullets %}<li>{{ b|safe }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endfor %}
+        <div class="nav">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/consumer-targets">Live Targets</a>
+        </div>
+    </div>
+</body>
+</html>
+'''
+
+
+def _render_guide(title, emoji, accent, intro, sections):
+    return render_template_string(
+        GUIDE_HTML, title=title, emoji=emoji, accent=accent,
+        intro=intro, sections=sections
+    )
+
+
+@bp.route('/farmer')
+def farmer_guide():
+    sections = [
+        ("Your goal", [
+            "Finish the game with as much <b>money</b> as possible.",
+            "You earn money only by <b>selling apples</b> — there is nothing for you to buy.",
+        ]),
+        ("Growing apples", [
+            "You start with <b>0 apples</b> and <b>$0</b>.",
+            "Every minute you automatically <b>harvest more apples</b> on a fixed schedule — you don't have to do anything to receive them.",
+            "Your barn holds at most <b>100 apples</b>. At the start of each minute, any apples above 100 are <b>lost</b>.",
+        ]),
+        ("Selling apples", [
+            "You can <b>only sell</b> apples — you never buy.",
+            "You sell your apples to the <b>Apple Makers</b>, who are the only buyers in the market.",
+            "You're paid the agreed <b>price for every apple</b> you sell, so the higher the price, the more you earn.",
+        ]),
+        ("The 100-apple cap", [
+            "Your barn holds at most <b>100 apples</b>.",
+            "Any apples beyond 100 at the start of a minute are <b>lost</b>, so don't let your stock pile up.",
+            "<b>Sell regularly</b> to keep your stock below the cap and waste nothing.",
+        ]),
+        ("Tips", [
+            "<b>Sell high.</b> Hold out for Makers offering the best prices.",
+            "Keep an eye on the <b>Dashboard</b> to watch the clock and your balances.",
+        ]),
+    ]
+    return _render_guide(
+        "Farmer", "🌾", "#00ff88",
+        "You grow apples and sell them to Apple Makers. Your job is to harvest "
+        "your crop and turn it into as much money as possible.",
+        sections
+    )
+
+
+@bp.route('/maker')
+def maker_guide():
+    sections = [
+        ("Your goal", [
+            "Finish the game with as much <b>money</b> as possible.",
+            "You profit by buying apples <b>cheaply from Farmers</b> and selling them <b>at a higher price to Consumers</b>.",
+        ]),
+        ("Your role in the market", [
+            "You are the <b>market maker</b> for apples: every trade in the game goes through you.",
+            "<b>Farmers sell</b> their apples to you, and <b>Consumers buy</b> apples from you.",
+            "You can <b>both buy and sell</b>, and you decide the prices you offer.",
+            "You start with <b>0 apples</b> and <b>$20,000</b> of capital.",
+        ]),
+        ("How your balances move", [
+            "When a <b>Farmer sells</b> to you: you gain apples and pay out money.",
+            "When a <b>Consumer buys</b> from you: you lose apples and take in money.",
+            "You can never drop below <b>0 apples</b> or below <b>$0</b> — you need inventory to sell and cash to buy.",
+        ]),
+        ("Making a market (the spread)", [
+            "Offer a <b>low price when buying</b> from Farmers and a <b>higher price when selling</b> to Consumers — the gap between them is your <b>spread</b>, and your profit.",
+            "Manage your <b>inventory</b>: buy enough apples to meet the demand you expect from Consumers, but don't overpay or you'll erode your margin.",
+        ]),
+        ("Tips", [
+            "Stay active on <b>both sides</b> of the market — you only profit when apples flow through you.",
+            "Balance your buying and selling so you're rarely stuck with too many or too few apples.",
+        ]),
+    ]
+    return _render_guide(
+        "Apple Maker", "🏪", "#007bff",
+        "You are the middle of the market. You buy apples from Farmers and sell "
+        "them to Consumers, earning the spread between your prices.",
+        sections
+    )
+
+
+@bp.route('/consumer')
+def consumer_guide():
+    sections = [
+        ("Your goal", [
+            "You are scored <b>first on how much of your apple target you fill</b>, then on <b>how much money you have left</b>.",
+            "Meet every target — but spend wisely, because leftover cash is the tie-breaker.",
+        ]),
+        ("Your targets", [
+            "The game is split into <b>3-minute blocks</b> (minutes 0–2, 3–5, 6–8, …).",
+            "Each block you are given an <b>apple target</b>: the total apples you must buy during that block.",
+            "Any apples you buy <b>during the block</b> count toward that block's target. Buying <b>more than the target earns no extra credit</b>.",
+            "When a new block starts, a <b>fresh target</b> appears.",
+        ]),
+        ("Reading your target", [
+            "On the <b>Dashboard</b> your target shows as a <b>negative number of apples</b> (for example <b>-130</b>).",
+            "Each apple you buy moves it <b>toward 0</b>. When it reaches <b>0</b>, you've met the block target.",
+            "The <b>Live Targets</b> page also shows the current block and its time window.",
+        ]),
+        ("Buying apples", [
+            "You can <b>only buy</b> apples — you never sell.",
+            "You buy your apples from the <b>Apple Makers</b>, who are the only sellers in the market.",
+            "You start with <b>$100,000</b> to spend, and you pay the agreed <b>price for every apple</b> you buy.",
+        ]),
+        ("Tips", [
+            "Don't leave a target to the last second — you have a <b>full 3 minutes</b> per block.",
+            "<b>Buy low.</b> A filled target with cash to spare beats overpaying.",
+        ]),
+    ]
+    return _render_guide(
+        "Consumer", "🛒", "#ffa500",
+        "You must buy a target number of apples in every 3-minute block. Hit your "
+        "targets while spending as little as possible.",
+        sections
+    )
+
+
 @bp.route('/users')
 def show_users():
     all_users = Users.query.all()
@@ -941,6 +1104,9 @@ def admin():
                 <a href="/adjust" class="nav-link">Adjust Balances</a>
                 <a href="/results" class="nav-link">Final Results</a>
                 <a href="/schedule" class="nav-link">Ledger</a>
+                <a href="/farmer" class="nav-link">🌾 Farmer Guide</a>
+                <a href="/maker" class="nav-link">🏪 Maker Guide</a>
+                <a href="/consumer" class="nav-link">🛒 Consumer Guide</a>
             </div>
         </div>
     </body>
