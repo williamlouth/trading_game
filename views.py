@@ -1,12 +1,12 @@
 from datetime import datetime
 
 from flask import (Blueprint, request, render_template_string, redirect,
-                   flash, get_flashed_messages, jsonify)
+                   flash, get_flashed_messages, jsonify, abort)
 
 from models import (db, Users, Trades, MinuteUpdates, GameState, FarmerDiscards,
                     minuteUpdate, tick_game, addUsers, generate_schedule,
                     validate_role, compute_results, compute_trade_highlights,
-                    game_clock, dashboard_trades, dashboard_users)
+                    game_clock, dashboard_trades, dashboard_users, execute_trade)
 
 bp = Blueprint('main', __name__)
 
@@ -485,7 +485,13 @@ def show_users():
                 <tbody>
                     {% for user in users %}
                     <tr>
-                        <td class="username">{{ user.username }}</td>
+                        <td class="username">
+                            {% if user.username.startswith('A') %}
+                                <a href="/{{ user.username }}" style="color:#007bff; text-decoration:none;">{{ user.username }} 🏪</a>
+                            {% else %}
+                                {{ user.username }}
+                            {% endif %}
+                        </td>
                         <td class="apples">{{ user.apples }}</td>
                         <td class="money">${{ "{:,.2f}".format(user.monies) if user.monies else "0.00" }}</td>
                     </tr>
@@ -503,112 +509,15 @@ def show_users():
 @bp.route('/inputTrade', methods=['GET', 'POST'])
 def input_trade():
     if request.method == 'POST':
-        name_a = request.form.get('partyA')
-        name_b = request.form.get('partyB')
-
-        try:
-            t_offset = int(request.form.get('timeOffset') or 0)
-            price = int(request.form.get('price') or 0)
-            volume = int(request.form.get('volume') or 0)
-
-            if price <= 0:
-                flash("Error: Price must be positive.", "error")
-                return redirect('/inputTrade')
-            if volume == 0:
-                flash("Error: Volume cannot be zero.", "error")
-                return redirect('/inputTrade')
-
-            money_total = price * volume
-            dA = volume
-
-            user_a = Users.query.filter_by(username=name_a).first()
-            user_b = Users.query.filter_by(username=name_b).first()
-
-            if not user_a or not user_b:
-                flash("Error: One or both users not found.", "error")
-                return redirect('/inputTrade')
-
-            if user_a.username[0] == 'A':
-                flash(f"Error: {user_a.username} is a market maker and must always be Party B.", "error")
-                return redirect('/inputTrade')
-
-            if user_b.username[0] != 'A':
-                flash(f"Error: {user_b.username} is not a market maker — Party B must be an Apple Maker (A).", "error")
-                return redirect('/inputTrade')
-
-            state = GameState.query.first()
-
-            now = datetime.now()
-            current_game_minute = 0
-            if state and state.is_active and state.start_time:
-                current_game_minute = int((now - state.start_time).total_seconds() // 60)
-
-            # For late farmer apple sales, include discarded apples in validation
-            is_late_farmer_apple_sale = (
-                user_a.username.startswith("F") and
-                dA < 0 and
-                current_game_minute > t_offset
-            )
-            farmer_discard_record = None
-            discard_apples = 0
-            if is_late_farmer_apple_sale:
-                farmer_discard_record = FarmerDiscards.query.filter_by(
-                    party=user_a.id, timeOffset=t_offset
-                ).first()
-                discard_apples = farmer_discard_record.apples if farmer_discard_record else 0
-                user_a.apples = (user_a.apples or 0) + discard_apples
-
-            error_a = validate_role(user_a, dA, -money_total)
-
-            if is_late_farmer_apple_sale:
-                user_a.apples = (user_a.apples or 0) - discard_apples  # restore
-
-            if error_a:
-                flash(error_a, "error")
-                return redirect('/inputTrade')
-
-            # Party B: Loses apples, Gains money
-            error_b = validate_role(user_b, -dA, money_total)
-            if error_b:
-                flash(error_b, "error")
-                return redirect('/inputTrade')
-
-            # If everything passes:
-            if is_late_farmer_apple_sale and discard_apples > 0:
-                absorbed = min(discard_apples, -dA)
-                farmer_discard_record.apples -= absorbed
-                user_a.apples = (user_a.apples or 0) + dA + absorbed
-            else:
-                user_a.apples += dA
-            user_b.apples -= dA
-            user_a.monies -= money_total
-            user_b.monies += money_total
-
-            new_trade = Trades(
-                partyA=user_a.id,
-                partyB=user_b.id,
-                apples=dA,
-                monies=-money_total,
-                timeOffset=t_offset
-            )
-            db.session.add(new_trade)
-            db.session.commit()
-
-            # The Summary Message
-            resource = "🍎 Apples"
-            if volume > 0:
-                 summary = f"Trade Executed: {name_a} bought {abs(volume)} {resource} from {name_b} at ${price:.2f} (Total: ${abs(money_total):.2f}) at T+{t_offset}m"
-            else:
-                summary = f"Trade Executed: {name_a} sold {abs(volume)} {resource} to {name_b} at ${price:.2f} (Total: ${abs(money_total):.2f}) at T+{t_offset}m"
-            flash(summary, "success")
-
-            return redirect('/inputTrade?focus=apple')
-
-
-        except Exception as e:
-            db.session.rollback()
-            flash(f"System Error: {str(e)}", "error")
-            return redirect('/inputTrade')
+        ok, message = execute_trade(
+            request.form.get('partyA'),
+            request.form.get('partyB'),
+            request.form.get('timeOffset'),
+            request.form.get('price'),
+            request.form.get('volume'),
+        )
+        flash(message, "success" if ok else "error")
+        return redirect('/inputTrade?focus=apple' if ok else '/inputTrade')
 
     # Get the current minute for the auto-fill
     state = GameState.query.first()
@@ -674,6 +583,92 @@ def input_trade():
         
         <p style="text-align: center;"><a href="/dashboard" style="color: #666;">View Live Dashboard</a></p>
     ''', current_minute=current_minute)
+
+
+MAKER_TRADE_HTML = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>{{ maker }} — Trade Desk</title>
+        <style>
+            body { font-family: sans-serif; background: #121212; color: #e0e0e0; }
+            .container { display: flex; justify-content: center; padding: 20px; }
+            .box { width: 100%; max-width: 420px; border: 2px solid #007bff; background: #101622; padding: 24px; border-radius: 10px; }
+            input { width: 100%; margin-bottom: 12px; padding: 9px; box-sizing: border-box; background: #2d2d2d; color: white; border: 1px solid #444; }
+            button { width: 100%; padding: 12px; cursor: pointer; font-weight: bold; border: none; border-radius: 5px; background: #007bff; color: white; }
+            label { font-size: 0.8rem; color: #aaa; }
+            .hint { font-size: 0.75rem; color: #777; margin: -6px 0 12px; }
+
+            .flash-container { max-width: 420px; margin: 20px auto 0; }
+            .flash { padding: 14px; border-radius: 5px; margin-bottom: 10px; text-align: center; font-weight: bold; }
+            .flash-success { background: #004d26; color: #00ff88; border: 1px solid #00ff88; }
+            .flash-error { background: #4d0000; color: #ff4d4d; border: 1px solid #ff4d4d; }
+            h1 { text-align: center; }
+            .maker-tag { color: #007bff; }
+        </style>
+    </head>
+    <body>
+        <div class="flash-container">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% if messages %}
+                {% for category, message in messages %}
+                  <div class="flash flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
+              {% endif %}
+            {% endwith %}
+        </div>
+
+        <h1>🏪 <span class="maker-tag">{{ maker }}</span> — Trade Desk</h1>
+        <div class="container">
+            <div class="box">
+                <h2>🍎 Apple Trade as {{ maker }}</h2>
+                <form method="POST">
+                    <label>Counterparty</label>
+                    <input type="text" name="counterparty" placeholder="Farmer or Consumer (e.g. F0, C1)" required autofocus>
+                    <label>Price</label>
+                    <input type="number" step="any" name="price" required>
+                    <label>Volume</label>
+                    <input type="number" step="any" name="volume" required>
+                    <div class="hint">Positive volume = {{ maker }} buys apples from the counterparty. Negative = {{ maker }} sells apples to the counterparty.</div>
+                    <button type="submit">Execute Trade as {{ maker }}</button>
+                </form>
+            </div>
+        </div>
+        <p style="text-align: center;"><a href="/dashboard" style="color: #666;">View Live Dashboard</a></p>
+    </body>
+    </html>
+'''
+
+
+@bp.route('/<maker>', methods=['GET', 'POST'])
+def maker_trade(maker):
+    user_b = Users.query.filter_by(username=maker).first()
+    if not user_b or not user_b.username.startswith('A'):
+        abort(404)
+
+    if request.method == 'POST':
+        # The trade is always booked at the current game minute.
+        _, _, current_minute = game_clock()
+
+        # Volume is entered from the maker's point of view: positive = the maker
+        # buys. execute_trade expects the counterparty's (taker's) delta, which
+        # is the opposite sign.
+        try:
+            maker_volume = int(request.form.get('volume') or 0)
+        except (TypeError, ValueError):
+            maker_volume = 0
+
+        ok, message = execute_trade(
+            request.form.get('counterparty'),
+            maker,
+            current_minute,
+            request.form.get('price'),
+            -maker_volume,
+        )
+        flash(message, "success" if ok else "error")
+        return redirect('/' + maker)
+
+    return render_template_string(MAKER_TRADE_HTML, maker=maker)
 
 
 @bp.route('/schedule')

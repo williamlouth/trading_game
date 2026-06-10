@@ -8,7 +8,7 @@ from models import (db, Users, Trades, MinuteUpdates, GameState, FarmerDiscards,
                     generateFarmer, generateConsumer, generate_schedule,
                     consumer_fulfillment, compute_results, compute_trade_highlights,
                     consumer_block_remaining, game_clock, dashboard_trades,
-                    dashboard_users)
+                    dashboard_users, execute_trade)
 
 
 @pytest.fixture
@@ -447,3 +447,70 @@ def test_dashboard_users_consumer_shows_negative_target(app):
     assert rows['A0']['role'] == 'maker'
     assert rows['C0']['apples'] == -60
     assert rows['C0']['role'] == 'consumer'
+
+
+# --- execute_trade ---
+
+def test_execute_trade_consumer_buy_updates_balances(app):
+    addUsers(0, 1, 1)
+    maker = Users.query.filter_by(username="A0").first()
+    maker.apples = 100
+    consumer = Users.query.filter_by(username="C0").first()
+    db.session.commit()
+
+    ok, msg = execute_trade("C0", "A0", t_offset=0, price=10, volume=30)
+    assert ok is True
+    assert "bought 30" in msg
+
+    assert Users.query.filter_by(username="C0").first().apples == 30
+    assert Users.query.filter_by(username="C0").first().monies == 100000 - 300
+    assert Users.query.filter_by(username="A0").first().apples == 70
+    assert Users.query.filter_by(username="A0").first().monies == 20000 + 300
+    assert Trades.query.count() == 1
+
+
+def test_execute_trade_farmer_sell_updates_balances(app):
+    addUsers(1, 1, 0)
+    farmer = Users.query.filter_by(username="F0").first()
+    farmer.apples = 50
+    db.session.commit()
+
+    ok, msg = execute_trade("F0", "A0", t_offset=0, price=4, volume=-30)
+    assert ok is True
+    assert "sold 30" in msg
+    assert Users.query.filter_by(username="F0").first().apples == 20
+    assert Users.query.filter_by(username="F0").first().monies == 120
+    assert Users.query.filter_by(username="A0").first().apples == 30
+
+
+def test_execute_trade_rejects_maker_as_taker(app):
+    addUsers(0, 2, 0)
+    ok, msg = execute_trade("A1", "A0", t_offset=0, price=5, volume=5)
+    assert ok is False
+    assert "must always be Party B" in msg
+    assert Trades.query.count() == 0
+
+
+def test_execute_trade_rejects_non_maker_counterparty(app):
+    addUsers(1, 0, 1)
+    ok, msg = execute_trade("C0", "F0", t_offset=0, price=5, volume=5)
+    assert ok is False
+    assert "not a market maker" in msg
+
+
+def test_execute_trade_rejects_farmer_buy(app):
+    addUsers(1, 1, 0)
+    ok, msg = execute_trade("F0", "A0", t_offset=0, price=5, volume=5)
+    assert ok is False
+    assert "can only sell apples" in msg
+
+
+def test_execute_trade_rejects_bad_price_and_volume(app):
+    addUsers(0, 1, 1)
+    ok, msg = execute_trade("C0", "A0", t_offset=0, price=0, volume=5)
+    assert ok is False
+    assert "Price must be positive" in msg
+
+    ok, msg = execute_trade("C0", "A0", t_offset=0, price=5, volume=0)
+    assert ok is False
+    assert "Volume cannot be zero" in msg

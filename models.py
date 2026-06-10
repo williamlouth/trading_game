@@ -152,6 +152,107 @@ def validate_role(user, delta_apples, delta_monies):
     return None
 
 
+def execute_trade(name_a, name_b, t_offset, price, volume):
+    """Execute an apple trade between taker `name_a` and maker `name_b`.
+
+    `name_a` is the taker (a Farmer or Consumer), `name_b` the Apple Maker.
+    A positive `volume` means the taker buys apples from the maker; a negative
+    `volume` means the taker sells apples to the maker.
+
+    Returns (ok, message). Nothing is committed when ok is False.
+    """
+    try:
+        t_offset = int(t_offset or 0)
+        price = int(price or 0)
+        volume = int(volume or 0)
+
+        if price <= 0:
+            return False, "Error: Price must be positive."
+        if volume == 0:
+            return False, "Error: Volume cannot be zero."
+
+        money_total = price * volume
+        dA = volume
+
+        user_a = Users.query.filter_by(username=name_a).first()
+        user_b = Users.query.filter_by(username=name_b).first()
+
+        if not user_a or not user_b:
+            return False, "Error: One or both users not found."
+
+        if user_a.username[0] == 'A':
+            return False, f"Error: {user_a.username} is a market maker and must always be Party B."
+
+        if user_b.username[0] != 'A':
+            return False, f"Error: {user_b.username} is not a market maker — Party B must be an Apple Maker (A)."
+
+        state = GameState.query.first()
+        now = datetime.now()
+        current_game_minute = 0
+        if state and state.is_active and state.start_time:
+            current_game_minute = int((now - state.start_time).total_seconds() // 60)
+
+        # For late farmer apple sales, include discarded apples in validation
+        is_late_farmer_apple_sale = (
+            user_a.username.startswith("F") and
+            dA < 0 and
+            current_game_minute > t_offset
+        )
+        farmer_discard_record = None
+        discard_apples = 0
+        if is_late_farmer_apple_sale:
+            farmer_discard_record = FarmerDiscards.query.filter_by(
+                party=user_a.id, timeOffset=t_offset
+            ).first()
+            discard_apples = farmer_discard_record.apples if farmer_discard_record else 0
+            user_a.apples = (user_a.apples or 0) + discard_apples
+
+        error_a = validate_role(user_a, dA, -money_total)
+
+        if is_late_farmer_apple_sale:
+            user_a.apples = (user_a.apples or 0) - discard_apples  # restore
+
+        if error_a:
+            return False, error_a
+
+        # Party B: Loses apples, Gains money
+        error_b = validate_role(user_b, -dA, money_total)
+        if error_b:
+            return False, error_b
+
+        # If everything passes:
+        if is_late_farmer_apple_sale and discard_apples > 0:
+            absorbed = min(discard_apples, -dA)
+            farmer_discard_record.apples -= absorbed
+            user_a.apples = (user_a.apples or 0) + dA + absorbed
+        else:
+            user_a.apples += dA
+        user_b.apples -= dA
+        user_a.monies -= money_total
+        user_b.monies += money_total
+
+        new_trade = Trades(
+            partyA=user_a.id,
+            partyB=user_b.id,
+            apples=dA,
+            monies=-money_total,
+            timeOffset=t_offset
+        )
+        db.session.add(new_trade)
+        db.session.commit()
+
+        resource = "🍎 Apples"
+        if volume > 0:
+            summary = f"Trade Executed: {name_a} bought {abs(volume)} {resource} from {name_b} at ${price:.2f} (Total: ${abs(money_total):.2f}) at T+{t_offset}m"
+        else:
+            summary = f"Trade Executed: {name_a} sold {abs(volume)} {resource} to {name_b} at ${price:.2f} (Total: ${abs(money_total):.2f}) at T+{t_offset}m"
+        return True, summary
+
+    except Exception as e:
+        db.session.rollback()
+        return False, f"System Error: {str(e)}"
+
+
 def generateFarmer(id, l):
     for index, item in enumerate(l):
         update = MinuteUpdates(party = id, timeOffset = index, apples = item)
