@@ -57,7 +57,7 @@ def test_add_users_counts_and_starting_money(app):
 
     assert Users.query.count() == 6
     assert Users.query.filter_by(username="F0").first().monies == 0
-    assert Users.query.filter_by(username="A0").first().monies == 20000
+    assert Users.query.filter_by(username="A0").first().monies == 30000
     assert Users.query.filter_by(username="C0").first().monies == 100000
 
 
@@ -465,7 +465,7 @@ def test_execute_trade_consumer_buy_updates_balances(app):
     assert Users.query.filter_by(username="C0").first().apples == 30
     assert Users.query.filter_by(username="C0").first().monies == 100000 - 300
     assert Users.query.filter_by(username="A0").first().apples == 70
-    assert Users.query.filter_by(username="A0").first().monies == 20000 + 300
+    assert Users.query.filter_by(username="A0").first().monies == 30000 + 300
     assert Trades.query.count() == 1
 
 
