@@ -3,6 +3,8 @@ from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
 
+FARMER_BARN_CAP = 50
+
 
 class Users(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -50,7 +52,7 @@ def minuteUpdate(current_offset):
             if user.username.startswith("F"):
                 current_apples = user.apples or 0
                 if current_offset > 0:
-                    discarded = max(0, current_apples - 100)
+                    discarded = max(0, current_apples - FARMER_BARN_CAP)
                     if discarded > 0:
                         existing_discard = FarmerDiscards.query.filter_by(
                             party=user.id, timeOffset=current_offset - 1
@@ -63,7 +65,7 @@ def minuteUpdate(current_offset):
                                 timeOffset=current_offset - 1,
                                 apples=discarded
                             ))
-                user.apples = min(100, current_apples)
+                user.apples = min(FARMER_BARN_CAP, current_apples)
                 user.apples = (user.apples or 0) + (update.apples or 0)
 
 def tick_game():

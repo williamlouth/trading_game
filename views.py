@@ -327,7 +327,7 @@ GUIDE_HTML = '''
         {% endfor %}
         <div class="nav">
             <a href="/dashboard">Dashboard</a>
-            <a href="/consumer-targets">Live Targets</a>
+            {% if show_targets %}<a href="/consumer-targets">Live Targets</a>{% endif %}
         </div>
     </div>
 </body>
@@ -335,10 +335,10 @@ GUIDE_HTML = '''
 '''
 
 
-def _render_guide(title, emoji, accent, intro, sections):
+def _render_guide(title, emoji, accent, intro, sections, show_targets=True):
     return render_template_string(
         GUIDE_HTML, title=title, emoji=emoji, accent=accent,
-        intro=intro, sections=sections
+        intro=intro, sections=sections, show_targets=show_targets
     )
 
 
@@ -352,16 +352,16 @@ def farmer_guide():
         ("Growing apples", [
             "You start with <b>0 apples</b> and <b>$0</b>.",
             "Every minute you automatically <b>harvest more apples</b> on a fixed schedule — you don't have to do anything to receive them.",
-            "Your barn holds at most <b>100 apples</b>. At the start of each minute, any apples above 100 are <b>lost</b>.",
+            "Your barn holds at most <b>50 apples</b>. At the start of each minute, any apples above 50 are <b>lost</b>.",
         ]),
         ("Selling apples", [
             "You can <b>only sell</b> apples — you never buy.",
             "You sell your apples to the <b>Apple Makers</b>, who are the only buyers in the market.",
             "You're paid the agreed <b>price for every apple</b> you sell, so the higher the price, the more you earn.",
         ]),
-        ("The 100-apple cap", [
-            "Your barn holds at most <b>100 apples</b>.",
-            "Any apples beyond 100 at the start of a minute are <b>lost</b>, so don't let your stock pile up.",
+        ("The 50-apple cap", [
+            "Your barn holds at most <b>50 apples</b>.",
+            "Any apples beyond 50 at the start of a minute are <b>lost</b>, so don't let your stock pile up.",
             "<b>Sell regularly</b> to keep your stock below the cap and waste nothing.",
         ]),
         ("Tips", [
@@ -388,7 +388,7 @@ def maker_guide():
             "You are the <b>market maker</b> for apples: every trade in the game goes through you.",
             "<b>Farmers sell</b> their apples to you, and <b>Consumers buy</b> apples from you.",
             "You can <b>both buy and sell</b>, and you decide the prices you offer.",
-            "You start with <b>0 apples</b> and <b>$20,000</b> of capital.",
+            "You start with <b>0 apples</b> and <b>$30,000</b> of capital.",
         ]),
         ("How your balances move", [
             "When a <b>Farmer sells</b> to you: you gain apples and pay out money.",
@@ -428,7 +428,6 @@ def consumer_guide():
         ("Reading your target", [
             "On the <b>Dashboard</b> your target shows as a <b>negative number of apples</b> (for example <b>-130</b>).",
             "Each apple you buy moves it <b>toward 0</b>. When it reaches <b>0</b>, you've met the block target.",
-            "The <b>Live Targets</b> page also shows the current block and its time window.",
         ]),
         ("Buying apples", [
             "You can <b>only buy</b> apples — you never sell.",
@@ -444,7 +443,8 @@ def consumer_guide():
         "Consumer", "🛒", "#ffa500",
         "You must buy a target number of apples in every 3-minute block. Hit your "
         "targets while spending as little as possible.",
-        sections
+        sections,
+        show_targets=False
     )
 
 

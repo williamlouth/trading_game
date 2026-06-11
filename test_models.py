@@ -124,12 +124,12 @@ def test_minute_update_caps_farmer_and_records_discard(app):
     db.session.commit()
 
     farmer = Users.query.filter_by(username="F0").first()
-    # apples are capped to 100 before the new 30 are added
-    assert farmer.apples == 130
+    # apples are capped to 50 before the new 30 are added
+    assert farmer.apples == 80
 
     discard = FarmerDiscards.query.filter_by(party=farmer.id, timeOffset=0).first()
     assert discard is not None
-    assert discard.apples == 20
+    assert discard.apples == 70
 
 
 def test_minute_update_does_not_apply_consumer_targets(app):
