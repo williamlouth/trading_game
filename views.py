@@ -598,6 +598,9 @@ MAKER_TRADE_HTML = '''
             button { width: 100%; padding: 12px; cursor: pointer; font-weight: bold; border: none; border-radius: 5px; background: #007bff; color: white; }
             label { font-size: 0.8rem; color: #aaa; }
             .hint { font-size: 0.75rem; color: #777; margin: -6px 0 12px; }
+            .summary { background: #0a0f18; border: 1px solid #007bff; border-radius: 6px;
+                       padding: 12px; margin: 4px 0 16px; text-align: center; font-weight: bold;
+                       color: #6cb2ff; min-height: 1.2em; }
 
             .flash-container { max-width: 420px; margin: 20px auto 0; }
             .flash { padding: 14px; border-radius: 5px; margin-bottom: 10px; text-align: center; font-weight: bold; }
@@ -623,18 +626,41 @@ MAKER_TRADE_HTML = '''
             <div class="box">
                 <h2>🍎 Apple Trade as {{ maker }}</h2>
                 <form method="POST">
-                    <label>Counterparty</label>
-                    <input type="text" name="counterparty" placeholder="Farmer or Consumer (e.g. F0, C1)" required autofocus>
-                    <label>Price</label>
-                    <input type="number" step="any" name="price" required>
                     <label>Volume</label>
-                    <input type="number" step="any" name="volume" required>
+                    <input type="number" step="any" id="volume" name="volume" required autofocus>
                     <div class="hint">Positive volume = {{ maker }} buys apples from the counterparty. Negative = {{ maker }} sells apples to the counterparty.</div>
+                    <label>Price</label>
+                    <input type="number" step="any" id="price" name="price" required>
+                    <label>Counterparty</label>
+                    <input type="text" id="counterparty" name="counterparty" placeholder="Farmer or Consumer (e.g. F0, C1)" required>
+                    <div class="summary" id="summary"></div>
                     <button type="submit">Execute Trade as {{ maker }}</button>
                 </form>
             </div>
         </div>
         <p style="text-align: center;"><a href="/dashboard" style="color: #666;">View Live Dashboard</a></p>
+        <script>
+            const makerName = "{{ maker }}";
+            const volEl = document.getElementById('volume');
+            const priceEl = document.getElementById('price');
+            const cpEl = document.getElementById('counterparty');
+            const summaryEl = document.getElementById('summary');
+            function updateSummary() {
+                const v = parseFloat(volEl.value);
+                const p = parseFloat(priceEl.value);
+                const cp = (cpEl.value || '').trim().toUpperCase() || '???';
+                if (isNaN(v) || v === 0 || isNaN(p)) {
+                    summaryEl.textContent = 'Enter volume, price and counterparty to preview the trade.';
+                    return;
+                }
+                const qty = Math.abs(v);
+                const verb = v > 0 ? 'Buying' : 'Selling';
+                const direction = v > 0 ? 'from' : 'to';
+                summaryEl.textContent = makerName + ' ' + verb + ' ' + qty + ' apples at $' + p + ' an apple ' + direction + ' ' + cp;
+            }
+            [volEl, priceEl, cpEl].forEach(el => el.addEventListener('input', updateSummary));
+            updateSummary();
+        </script>
     </body>
     </html>
 '''
